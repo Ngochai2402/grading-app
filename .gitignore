@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment variables - KHÔNG BAO GIỜ commit file này
+.env
+.env.local
+.env.production
+
+# Upload/result files - dữ liệu người dùng
+backend/uploads/
+backend/results/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build output
+frontend/build/
+frontend/dist/
+
+# Logs
+*.log
+npm-debug.log*
