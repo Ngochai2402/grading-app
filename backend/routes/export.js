@@ -252,6 +252,21 @@ async function createAllAnnotated(data, outputPath) {
   fs.writeFileSync(outputPath, canvas.toBuffer('image/png'));
 }
 
+function mathToLatex(text) {
+  if (!text) return '';
+  return text
+    .replace(/x₁x₂/g, '\\(x_1 x_2\\)').replace(/x₁/g, '\\(x_1\\)').replace(/x₂/g, '\\(x_2\\)')
+    .replace(/x₃/g, '\\(x_3\\)').replace(/x₄/g, '\\(x_4\\)')
+    .replace(/\(([^)]+)\)²/g, (m,p1) => `\\((${p1})^2\\)`)
+    .replace(/([A-Za-z0-9])²/g, '\\($1^2\\)')
+    .replace(/([A-Za-z0-9])³/g, '\\($1^3\\)')
+    .replace(/√(\d+)/g, '\\(\\sqrt{$1}\\)')
+    .replace(/(\d+)\/(\d+)/g, '\\(\\dfrac{$1}{$2}\\)')
+    .replace(/[Δ△]/g, '\\(\\Delta\\)')
+    .replace(/≈/g, '\\(\\approx\\)').replace(/≤/g, '\\(\\leq\\)').replace(/≥/g, '\\(\\geq\\)')
+    .replace(/⟹/g, '\\(\\Rightarrow\\)').replace(/→/g, '\\(\\to\\)');
+}
+
 function buildAnnotationLines(gradingResult, transcribed) {
   const lines = [];
   if (!gradingResult?.cac_cau) return lines;
@@ -279,9 +294,9 @@ function generateReportHTML(data) {
       const bg = isSai ? '#fff5f5' : isDung ? '#f5fff8' : '#fffdf0';
       const kqColor = isSai ? '#c0392b' : isDung ? '#1b7a3e' : '#c47f17';
       return `<tr style="background:${bg}">
-        <td style="font-family:monospace;font-size:13px;padding:5px 10px;color:#222">${d.dong || ''}</td>
+        <td style="font-family:monospace;font-size:13px;padding:5px 10px;color:#222">${mathToLatex(d.dong || '')}</td>
         <td style="font-weight:700;color:${kqColor};padding:5px 10px;white-space:nowrap">${d.ket_qua || ''}</td>
-        <td style="font-size:12px;color:#c0392b;padding:5px 10px">${d.ghi_chu || ''}</td>
+        <td style="font-size:12px;color:#888;padding:5px 10px">${mathToLatex(d.ghi_chu || '')}</td>
       </tr>`;
     }).join('');
 
