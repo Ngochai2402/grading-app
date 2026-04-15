@@ -1,18 +1,24 @@
 {
-  "name": "grading-app-frontend",
+  "name": "grading-app-backend",
   "version": "1.0.0",
-  "type": "module",
+  "description": "Backend chấm bài tự luận bằng Claude Vision",
+  "main": "server.js",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@anthropic-ai/sdk": "^0.27.0",
+    "@google/generative-ai": "^0.21.0",
+    "canvas": "^2.11.2",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mammoth": "^1.8.0",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^10.0.0",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^5.4.1"
+    "nodemon": "^3.1.0"
   }
 }
