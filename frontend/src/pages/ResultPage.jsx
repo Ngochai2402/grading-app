@@ -2,116 +2,115 @@ import { useEffect, useRef, useState } from "react";
 
 const API = "https://grading-app-production-2949.up.railway.app";
 
-// Load KaTeX CSS + JS một lần
-function loadKatex() {
-  if (window._katexLoaded) return;
-  window._katexLoaded = true;
+// Inject KaTeX một lần duy nhất
+function ensureKatex(cb) {
+  if (window.katex) { cb(); return; }
+  if (window._katexLoading) { window._katexCbs = window._katexCbs || []; window._katexCbs.push(cb); return; }
+  window._katexLoading = true;
 
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css";
-  document.head.appendChild(link);
+  const css = document.createElement("link");
+  css.rel = "stylesheet";
+  css.href = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css";
+  document.head.appendChild(css);
 
-  const script = document.createElement("script");
-  script.src = "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js";
-  script.onload = () => { window._katexReady = true; };
-  document.head.appendChild(script);
+  const js = document.createElement("script");
+  js.src = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js";
+  js.onload = () => {
+    cb();
+    (window._katexCbs || []).forEach(f => f());
+  };
+  document.head.appendChild(js);
 }
 
-// Chuyển text thường → HTML có LaTeX render bằng KaTeX
-function renderMathHTML(text) {
-  if (!text || !window.katex) return text || "";
+// Tách text thành mảng {type: "text"|"math", value}
+function tokenize(text) {
+  if (!text) return [];
+  const tokens = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
 
-  // Các pattern cần convert sang LaTeX
-  const replacements = [
-    [/x₁x₂/g, "x_1x_2"],
-    [/x₁/g, "x_1"], [/x₂/g, "x_2"],
-    [/x₃/g, "x_3"], [/x₄/g, "x_4"],
-    [/\(([^)]+)\)²/g, "($1)^2"],
-    [/([a-zA-Z0-9])²/g, "$1^2"],
-    [/([a-zA-Z0-9])³/g, "$1^3"],
-    [/√(\d+)/g, "\\sqrt{$1}"],
-    [/Δ|△/g, "\\Delta"],
-    [/≈/g, "\\approx"], [/≤/g, "\\leq"], [/≥/g, "\\geq"],
-    [/⟹/g, "\\Rightarrow"], [/→/g, "\\to"],
-  ];
-
-  // Tách text thành chunks: text thường và math expressions
-  // Tìm pattern a/b (phân số) và các biểu thức
-  let result = text;
-  
-  // Escape HTML trước
-  result = result
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-  // Render từng ký hiệu toán bằng KaTeX inline
-  const mathPatterns = [
-    { re: /x₁x₂/g, latex: "x_1 x_2" },
-    { re: /x₁/g, latex: "x_1" },
-    { re: /x₂/g, latex: "x_2" },
-    { re: /x₃/g, latex: "x_3" },
-    { re: /x₄/g, latex: "x_4" },
-    { re: /\(([^)⁰¹²³]+)\)²/g, latex: null, fn: (m, p1) => katexRender(`(${toLatexStr(p1)})^2`) },
-    { re: /([A-Za-z0-9])²/g, latex: null, fn: (m, p1) => katexRender(`${p1}^2`) },
-    { re: /([A-Za-z0-9])³/g, latex: null, fn: (m, p1) => katexRender(`${p1}^3`) },
-    { re: /√(\d+)/g, latex: null, fn: (m, p1) => katexRender(`\\sqrt{${p1}}`) },
-    { re: /(\d+)\/(\d+)/g, latex: null, fn: (m, a, b) => katexRender(`\\dfrac{${a}}{${b}}`) },
-    { re: /[Δ△]/g, latex: "\\Delta" },
-    { re: /≈/g, latex: "\\approx" },
-    { re: /≤/g, latex: "\\leq" },
-    { re: /≥/g, latex: "\\geq" },
-    { re: /⟹/g, latex: "\\Rightarrow" },
-  ];
-
-  for (const p of mathPatterns) {
-    if (p.fn) {
-      result = result.replace(p.re, p.fn);
+    // x₁, x₂...
+    if ((ch === 'x' || ch === 'y') && i + 1 < text.length && "₀₁₂₃₄₅₆₇₈₉".includes(text[i+1])) {
+      const sub = "₀₁₂₃₄₅₆₇₈₉".indexOf(text[i+1]);
+      tokens.push({ type: "math", value: `${ch}_{${sub}}` });
+      i += 2; continue;
+    }
+    // lũy thừa: a²  a³
+    if (i > 0 && text[i] === '²') { 
+      const prev = tokens.pop();
+      if (prev) tokens.push({ type: "math", value: `${prev.type === "math" ? prev.value : prev.value}^2` });
+      else tokens.push({ type: "math", value: "^2" });
+      i++; continue;
+    }
+    if (i > 0 && text[i] === '³') {
+      const prev = tokens.pop();
+      if (prev) tokens.push({ type: "math", value: `${prev.type === "math" ? prev.value : prev.value}^3` });
+      else tokens.push({ type: "math", value: "^3" });
+      i++; continue;
+    }
+    // √
+    if (ch === '√') {
+      let num = '';
+      let j = i + 1;
+      while (j < text.length && /\d/.test(text[j])) { num += text[j]; j++; }
+      tokens.push({ type: "math", value: num ? `\\sqrt{${num}}` : `\\sqrt{}` });
+      i = j; continue;
+    }
+    // Δ △
+    if (ch === 'Δ' || ch === '△') { tokens.push({ type: "math", value: "\\Delta" }); i++; continue; }
+    // ≈ ≤ ≥ ⟹ →
+    if (ch === '≈') { tokens.push({ type: "math", value: "\\approx" }); i++; continue; }
+    if (ch === '≤') { tokens.push({ type: "math", value: "\\leq" }); i++; continue; }
+    if (ch === '≥') { tokens.push({ type: "math", value: "\\geq" }); i++; continue; }
+    if (ch === '⟹') { tokens.push({ type: "math", value: "\\Rightarrow" }); i++; continue; }
+    if (ch === '→') { tokens.push({ type: "math", value: "\\to" }); i++; continue; }
+    // phân số số/số
+    const fracMatch = text.slice(i).match(/^(\d+)\/(\d+)/);
+    if (fracMatch) {
+      tokens.push({ type: "math", value: `\\dfrac{${fracMatch[1]}}{${fracMatch[2]}}` });
+      i += fracMatch[0].length; continue;
+    }
+    // text thường
+    if (tokens.length && tokens[tokens.length-1].type === "text") {
+      tokens[tokens.length-1].value += ch;
     } else {
-      result = result.replace(p.re, () => katexRender(p.latex));
+      tokens.push({ type: "text", value: ch });
     }
+    i++;
   }
-
-  return result;
+  return tokens;
 }
 
-function toLatexStr(s) {
-  return s
-    .replace(/x₁/g, "x_1").replace(/x₂/g, "x_2")
-    .replace(/(\d+)\/(\d+)/g, "\\dfrac{$1}{$2}");
-}
-
-function katexRender(latex) {
-  try {
-    return window.katex.renderToString(latex, { throwOnError: false, displayMode: false });
-  } catch {
-    return latex;
-  }
-}
-
-function MathSpan({ text }) {
-  const [html, setHtml] = useState(text || "");
-  const [ready, setReady] = useState(false);
+function MathLine({ text }) {
+  const [parts, setParts] = useState(null);
 
   useEffect(() => {
-    loadKatex();
-    const check = setInterval(() => {
-      if (window._katexReady && window.katex) {
-        clearInterval(check);
-        setReady(true);
-      }
-    }, 100);
-    return () => clearInterval(check);
-  }, []);
+    if (!text) { setParts([]); return; }
+    ensureKatex(() => {
+      const tokens = tokenize(text);
+      const rendered = tokens.map((t, i) => {
+        if (t.type === "math") {
+          try {
+            return { type: "html", value: window.katex.renderToString(t.value, { throwOnError: false }) };
+          } catch { return { type: "text", value: t.value }; }
+        }
+        return t;
+      });
+      setParts(rendered);
+    });
+  }, [text]);
 
-  useEffect(() => {
-    if (ready && text) {
-      setHtml(renderMathHTML(text));
-    }
-  }, [ready, text]);
-
-  return <span dangerouslySetInnerHTML={{ __html: html }} />;
+  if (!parts) return <span>{text}</span>;
+  return (
+    <span>
+      {parts.map((p, i) =>
+        p.type === "html"
+          ? <span key={i} dangerouslySetInnerHTML={{ __html: p.value }} />
+          : <span key={i}>{p.value}</span>
+      )}
+    </span>
+  );
 }
 
 export default function ResultPage({ result, onBack }) {
@@ -150,7 +149,7 @@ export default function ResultPage({ result, onBack }) {
             <span style={{ fontSize: 26, fontWeight: 700, color: scoreColor }}>{phan_tram}%</span>
             <span style={{ fontWeight: 700, fontSize: 16, color: scoreColor }}>{xep_loai}</span>
           </div>
-          <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.6 }}><MathSpan text={nhan_xet_chung} /></p>
+          <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.6 }}><MathLine text={nhan_xet_chung} /></p>
         </div>
       </div>
 
@@ -181,13 +180,13 @@ export default function ResultPage({ result, onBack }) {
                         return (
                           <tr key={j} style={{ background: bg, borderTop: j > 0 ? "1px solid var(--border)" : "none" }}>
                             <td style={{ padding: "9px 14px", fontSize: 13, width: "45%" }}>
-                              <MathSpan text={dong.dong} />
+                              <MathLine text={dong.dong} />
                             </td>
-                            <td style={{ padding: "9px 10px", fontWeight: 700, color: kqColor, fontSize: 13, whiteSpace: "nowrap", width: "12%" }}>
+                            <td style={{ padding: "9px 10px", fontWeight: 700, color: kqColor, fontSize: 13, whiteSpace: "nowrap", width: "14%" }}>
                               {dong.ket_qua}
                             </td>
                             <td style={{ padding: "9px 14px", fontSize: 12, color: isSai ? "var(--accent)" : "var(--text3)", lineHeight: 1.5 }}>
-                              <MathSpan text={dong.ghi_chu} />
+                              <MathLine text={dong.ghi_chu} />
                             </td>
                           </tr>
                         );
@@ -198,12 +197,12 @@ export default function ResultPage({ result, onBack }) {
 
                 {cau.loi_sai && (
                   <div style={{ padding: "10px 16px", background: "#fff8f8", fontSize: 13, color: "var(--accent)", borderTop: "1px solid var(--border)" }}>
-                    ✗ <strong>Lỗi sai:</strong> <MathSpan text={cau.loi_sai} />
+                    ✗ <strong>Lỗi sai:</strong> <MathLine text={cau.loi_sai} />
                   </div>
                 )}
                 {cau.goi_y_sua && (
                   <div style={{ padding: "10px 16px", background: "#f0f7ff", fontSize: 13, color: "var(--blue)", borderTop: "1px solid var(--border)" }}>
-                    💡 <strong>Gợi ý:</strong> <MathSpan text={cau.goi_y_sua} />
+                    💡 <strong>Gợi ý:</strong> <MathLine text={cau.goi_y_sua} />
                   </div>
                 )}
               </div>
