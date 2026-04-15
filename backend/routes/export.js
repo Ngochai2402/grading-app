@@ -302,6 +302,9 @@ function generateReportHTML(data) {
 
   return `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8">
 <title>Kết quả - ${studentName}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',sans-serif;background:#f5f5f5;color:#222}
 .wrap{max-width:860px;margin:0 auto;padding:24px}.card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #eee}
 @media print{body{background:#fff}.no-print{display:none}}</style></head><body>
@@ -318,7 +321,19 @@ function generateReportHTML(data) {
   <div class="no-print" style="text-align:center;margin-top:16px">
     <button onclick="window.print()" style="padding:12px 32px;background:#1a5ca8;color:#fff;border:none;border-radius:8px;font-size:15px;cursor:pointer">🖨️ In / Xuất PDF</button>
   </div>
-</div></body></html>`;
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  renderMathInElement(document.body, {
+    delimiters: [
+      {left:"\\(", right:"\\)", display:false},
+      {left:"\\[", right:"\\]", display:true}
+    ],
+    throwOnError: false
+  });
+});
+</script>
+</body></html>`;
 }
 
 module.exports = router;
