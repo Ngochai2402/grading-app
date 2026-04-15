@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-const API = import.meta.env.VITE_API_URL || "https://grading-app-production-2949.up.railway.app";
+const API = "https://grading-app-production-2949.up.railway.app";
 
 export default function HistoryPage({ onSelect }) {
   const [list, setList] = useState([]);
