@@ -1,5 +1,44 @@
 const API = "https://grading-app-production-2949.up.railway.app";
 
+// Load MathJax một lần
+if (typeof window !== 'undefined' && !window.MathJax) {
+  window.MathJax = {
+    tex: { inlineMath: [['$','$'], ['\\(','\\)']], displayMath: [['$$','$$']] },
+    svg: { fontCache: 'global' },
+    startup: { ready() { window.MathJax.startup.defaultReady(); } }
+  };
+  const s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js';
+  s.async = true;
+  document.head.appendChild(s);
+}
+
+function renderMath(text) {
+  if (!text) return '';
+  return text
+    .replace(/x₁/g, '\\(x_1\\)').replace(/x₂/g, '\\(x_2\\)')
+    .replace(/x₃/g, '\\(x_3\\)').replace(/x₄/g, '\\(x_4\\)')
+    .replace(/x₁x₂/g, '\\(x_1 x_2\\)')
+    .replace(/√(\d+)/g, '\\(\\sqrt{$1}\\)')
+    .replace(/\(([^)]+)\)²/g, '\\(($1)^2\\)')
+    .replace(/(\w+)²/g, '\\($1^2\\)')
+    .replace(/(\w+)³/g, '\\($1^3\\)')
+    .replace(/Δ/g, '\\(\\Delta\\)').replace(/△/g, '\\(\\Delta\\)')
+    .replace(/≈/g, '\\(\\approx\\)').replace(/≤/g, '\\(\\leq\\)').replace(/≥/g, '\\(\\geq\\)')
+    .replace(/⟹/g, '\\(\\Rightarrow\\)').replace(/→/g, '\\(\\to\\)')
+    .replace(/(\d+)\/(\d+)/g, '\\(\\frac{$1}{$2}\\)');
+}
+
+function MathText({ text }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && window.MathJax?.typesetPromise) {
+      window.MathJax.typesetPromise([ref.current]).catch(() => {});
+    }
+  }, [text]);
+  return <span ref={ref} dangerouslySetInnerHTML={{ __html: renderMath(text) }} />;
+}
+
 export default function ResultPage({ result, onBack }) {
   const { studentName, subject, gradingResult, imageUrls, resultId } = result;
   const { tong_diem, diem_toi_da, phan_tram, xep_loai, nhan_xet_chung, cac_cau } = gradingResult;
@@ -52,7 +91,7 @@ export default function ResultPage({ result, onBack }) {
             <span style={{ fontSize: 26, fontWeight: 700, color: scoreColor }}>{phan_tram}%</span>
             <span style={{ fontWeight: 700, fontSize: 16, color: scoreColor }}>{xep_loai}</span>
           </div>
-          <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.6 }}>{nhan_xet_chung}</p>
+          <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.6 }}><MathText text={nhan_xet_chung} /></p>
         </div>
       </div>
 
@@ -96,11 +135,11 @@ export default function ResultPage({ result, onBack }) {
                         }}>
                           <div>
                             <div style={{ fontFamily: "monospace", fontSize: 13, color: "var(--text)", marginBottom: dong.ghi_chu ? 3 : 0 }}>
-                              {dong.dong}
+                              <MathText text={dong.dong} />
                             </div>
                             {dong.ghi_chu && (
                               <div style={{ fontSize: 12, color: isSai ? "var(--accent)" : "var(--text3)", lineHeight: 1.5 }}>
-                                {dong.ghi_chu}
+                                <MathText text={dong.ghi_chu} />
                               </div>
                             )}
                           </div>
