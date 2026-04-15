@@ -165,16 +165,19 @@ router.get('/', (req, res) => {
 });
 
 function buildGradingPrompt(rubric, studentName, subject) {
-  return `Bạn là giáo viên chấm bài môn ${subject}. Hãy chấm bài làm của học sinh ${studentName} trong ảnh theo đúng đáp án và thang điểm sau.
+  return `Bạn là giáo viên chấm bài môn ${subject}. Hãy chấm bài làm của học sinh ${studentName}.
 
 === RUBRIC (ĐÁP ÁN + THANG ĐIỂM) ===
 ${JSON.stringify(rubric, null, 2)}
 
-=== YÊU CẦU ===
-1. Đọc kỹ bài làm của học sinh trong ảnh
-2. Đối chiếu từng câu với đáp án trong rubric
-3. Chấm điểm chính xác theo thang điểm quy định
-4. Chỉ ra lỗi sai cụ thể nếu có
+=== QUY TẮC CHẤM BẮT BUỘC ===
+1. ĐỌC TOÀN BỘ bài giải từng câu từ đầu đến cuối TRƯỚC KHI chấm
+2. Đọc kỹ từng dòng, từng bước, kể cả ký hiệu toán học, phân số, chữ nhỏ
+3. Nếu học sinh trình bày KHÁC đáp án nhưng KẾT QUẢ CUỐI ĐÚNG → CHO ĐIỂM TỐI ĐA
+4. Nếu học sinh có đủ ý và kết quả đúng → CHO ĐIỂM ĐẦY ĐỦ dù cách viết khác
+5. CHỈ trừ điểm khi học sinh THỰC SỰ tính sai hoặc BỎ TRỐNG hoàn toàn
+6. KHÔNG suy đoán thiếu bước nếu kết quả đúng đã có trong bài
+7. Khi không chắc chắn → ưu tiên cho học sinh điểm cao hơn
 
 === ĐỊNH DẠNG ĐẦU RA ===
 Trả về JSON CHÍNH XÁC theo cấu trúc sau, không thêm text ngoài JSON:
