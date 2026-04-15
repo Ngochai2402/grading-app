@@ -1,42 +1,53 @@
+import { useEffect, useRef } from "react";
+
 const API = "https://grading-app-production-2949.up.railway.app";
 
-// Load MathJax một lần
-if (typeof window !== 'undefined' && !window.MathJax) {
+// Load MathJax
+if (typeof window !== "undefined" && !window._mathJaxLoaded) {
+  window._mathJaxLoaded = true;
   window.MathJax = {
-    tex: { inlineMath: [['$','$'], ['\\(','\\)']], displayMath: [['$$','$$']] },
-    svg: { fontCache: 'global' },
-    startup: { ready() { window.MathJax.startup.defaultReady(); } }
+    tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]] },
+    svg: { fontCache: "global" },
   };
-  const s = document.createElement('script');
-  s.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js';
+  const s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js";
   s.async = true;
   document.head.appendChild(s);
 }
 
-function renderMath(text) {
-  if (!text) return '';
+function toLatex(text) {
+  if (!text) return "";
   return text
-    .replace(/x₁/g, '\\(x_1\\)').replace(/x₂/g, '\\(x_2\\)')
-    .replace(/x₃/g, '\\(x_3\\)').replace(/x₄/g, '\\(x_4\\)')
-    .replace(/x₁x₂/g, '\\(x_1 x_2\\)')
-    .replace(/√(\d+)/g, '\\(\\sqrt{$1}\\)')
-    .replace(/\(([^)]+)\)²/g, '\\(($1)^2\\)')
-    .replace(/(\w+)²/g, '\\($1^2\\)')
-    .replace(/(\w+)³/g, '\\($1^3\\)')
-    .replace(/Δ/g, '\\(\\Delta\\)').replace(/△/g, '\\(\\Delta\\)')
-    .replace(/≈/g, '\\(\\approx\\)').replace(/≤/g, '\\(\\leq\\)').replace(/≥/g, '\\(\\geq\\)')
-    .replace(/⟹/g, '\\(\\Rightarrow\\)').replace(/→/g, '\\(\\to\\)')
-    .replace(/(\d+)\/(\d+)/g, '\\(\\frac{$1}{$2}\\)');
+    .replace(/x₁x₂/g, "\\(x_1 x_2\\)")
+    .replace(/x₁/g, "\\(x_1\\)").replace(/x₂/g, "\\(x_2\\)")
+    .replace(/x₃/g, "\\(x_3\\)").replace(/x₄/g, "\\(x_4\\)")
+    .replace(/\(([^)]+)\)²/g, "\\(($1)^2\\)")
+    .replace(/([a-zA-Z0-9])²/g, "\\($1^2\\)")
+    .replace(/([a-zA-Z0-9])³/g, "\\($1^3\\)")
+    .replace(/√(\d+)/g, "\\(\\sqrt{$1}\\)")
+    .replace(/(\d+)\/(\d+)/g, "\\(\\dfrac{$1}{$2}\\)")
+    .replace(/[Δ△]/g, "\\(\\Delta\\)")
+    .replace(/≈/g, "\\(\\approx\\)")
+    .replace(/≤/g, "\\(\\leq\\)")
+    .replace(/≥/g, "\\(\\geq\\)")
+    .replace(/⟹/g, "\\(\\Rightarrow\\)")
+    .replace(/→/g, "\\(\\to\\)");
 }
 
-function MathText({ text }) {
+function Math({ text }) {
   const ref = useRef(null);
   useEffect(() => {
-    if (ref.current && window.MathJax?.typesetPromise) {
-      window.MathJax.typesetPromise([ref.current]).catch(() => {});
-    }
+    if (!ref.current) return;
+    const tryRender = () => {
+      if (window.MathJax?.typesetPromise) {
+        window.MathJax.typesetPromise([ref.current]).catch(() => {});
+      } else {
+        setTimeout(tryRender, 300);
+      }
+    };
+    tryRender();
   }, [text]);
-  return <span ref={ref} dangerouslySetInnerHTML={{ __html: renderMath(text) }} />;
+  return <span ref={ref} dangerouslySetInnerHTML={{ __html: toLatex(text) }} />;
 }
 
 export default function ResultPage({ result, onBack }) {
@@ -57,27 +68,13 @@ export default function ResultPage({ result, onBack }) {
     <div>
       {/* HEADER */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-        <button className="btn btn-ghost" onClick={onBack} style={{ padding: "8px 12px" }}>← Quay lại</button>
+        <button className="btn btn-ghost" onClick={onBack}>← Quay lại</button>
         <div style={{ flex: 1 }}>
-          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 24, fontWeight: 700 }}>
-            Kết quả chấm bài
-          </h1>
+          <h1 style={{ fontFamily: "'Playfair Display', serif", fontSize: 24, fontWeight: 700 }}>Kết quả chấm bài</h1>
           <div style={{ fontSize: 13, color: "var(--text2)" }}>{studentName} • {subject}</div>
         </div>
-        <a
-          href={`${API}/api/export/${resultId}/annotated-all`}
-          target="_blank"
-          rel="noreferrer"
-          className="btn btn-outline"
-          style={{ fontSize: 13, marginRight: 8 }}
-        >📝 Bài đã chấm</a>
-        <a
-          href={`${API}/api/export/${resultId}/html`}
-          target="_blank"
-          rel="noreferrer"
-          className="btn btn-outline"
-          style={{ fontSize: 13 }}
-        >🖨️ In / Xuất PDF</a>
+        <a href={`${API}/api/export/${resultId}/annotated-all`} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ fontSize: 13, marginRight: 8 }}>📝 Bài đã chấm</a>
+        <a href={`${API}/api/export/${resultId}/html`} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ fontSize: 13 }}>🖨️ In PDF</a>
       </div>
 
       {/* TỔNG ĐIỂM */}
@@ -91,78 +88,64 @@ export default function ResultPage({ result, onBack }) {
             <span style={{ fontSize: 26, fontWeight: 700, color: scoreColor }}>{phan_tram}%</span>
             <span style={{ fontWeight: 700, fontSize: 16, color: scoreColor }}>{xep_loai}</span>
           </div>
-          <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.6 }}><MathText text={nhan_xet_chung} /></p>
+          <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.6 }}><Math text={nhan_xet_chung} /></p>
         </div>
       </div>
 
-      {/* ĐIỂM TỪNG CÂU */}
+      {/* CHẤM TỪNG DÒNG */}
       <div className="card">
-        <div className="card-title">📊 Chi tiết từng câu</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="card-title">📋 Chấm từng dòng</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {(cac_cau || []).map((cau, i) => {
-            const pct = (cau.diem_dat / cau.diem_toi_da) * 100;
-            const c = pct >= 80 ? "var(--green)" : pct >= 40 ? "var(--amber)" : "var(--accent)";
+            const pct = cau.diem_dat / cau.diem_toi_da;
+            const c = pct >= 0.8 ? "var(--green)" : pct >= 0.4 ? "var(--amber)" : "var(--accent)";
             return (
-              <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, minWidth: 60 }}>{cau.so_cau}</div>
+              <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                {/* Header câu */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: "var(--surface2)", borderBottom: "1px solid var(--border)" }}>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>{cau.so_cau}</span>
                   {statusBadge(cau.trang_thai)}
-                  <div style={{ marginLeft: "auto", fontWeight: 700, color: c, fontSize: 16 }}>
-                    {cau.diem_dat}<span style={{ fontSize: 12, color: "var(--text3)", fontWeight: 400 }}>/{cau.diem_toi_da} điểm</span>
-                  </div>
+                  <span style={{ marginLeft: "auto", fontWeight: 700, color: c, fontSize: 17 }}>
+                    {cau.diem_dat}<span style={{ fontSize: 12, color: "var(--text3)", fontWeight: 400 }}>/{cau.diem_toi_da}đ</span>
+                  </span>
                 </div>
 
-                {/* Progress bar */}
-                <div style={{ background: "var(--border)", borderRadius: 4, height: 6, marginBottom: 10 }}>
-                  <div style={{ background: c, height: 6, borderRadius: 4, width: `${Math.min(pct, 100)}%`, transition: "width 0.5s" }} />
-                </div>
-
-                {/* CHẤM TỪNG DÒNG */}
+                {/* Bảng chấm từng dòng */}
                 {cau.cham_tung_dong && cau.cham_tung_dong.length > 0 && (
-                  <div style={{ marginTop: 10, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-                    <div style={{ background: "var(--surface2)", padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      Chi tiết từng dòng
-                    </div>
-                    {cau.cham_tung_dong.map((dong, j) => {
-                      const isDung = dong.ket_qua && dong.ket_qua.includes("✓");
-                      const isSai = dong.ket_qua && dong.ket_qua.includes("✗");
-                      return (
-                        <div key={j} style={{
-                          display: "grid", gridTemplateColumns: "1fr auto",
-                          gap: 8, padding: "8px 12px",
-                          borderTop: j > 0 ? "1px solid var(--border)" : "none",
-                          background: isSai ? "#fff8f8" : isDung ? "#f8fff9" : "var(--surface)"
-                        }}>
-                          <div>
-                            <div style={{ fontFamily: "monospace", fontSize: 13, color: "var(--text)", marginBottom: dong.ghi_chu ? 3 : 0 }}>
-                              <MathText text={dong.dong} />
-                            </div>
-                            {dong.ghi_chu && (
-                              <div style={{ fontSize: 12, color: isSai ? "var(--accent)" : "var(--text3)", lineHeight: 1.5 }}>
-                                <MathText text={dong.ghi_chu} />
-                              </div>
-                            )}
-                          </div>
-                          <div style={{
-                            fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
-                            color: isSai ? "var(--accent)" : isDung ? "var(--green)" : "var(--amber)"
-                          }}>
-                            {dong.ket_qua}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <tbody>
+                      {cau.cham_tung_dong.map((dong, j) => {
+                        const isDung = dong.ket_qua?.includes("✓");
+                        const isSai = dong.ket_qua?.includes("✗");
+                        const bg = isSai ? "#fff8f8" : isDung ? "#f8fff9" : "#fffdf5";
+                        const kqColor = isSai ? "var(--accent)" : isDung ? "var(--green)" : "var(--amber)";
+                        return (
+                          <tr key={j} style={{ background: bg, borderTop: j > 0 ? "1px solid var(--border)" : "none" }}>
+                            <td style={{ padding: "9px 14px", fontSize: 13, width: "50%" }}>
+                              <Math text={dong.dong} />
+                            </td>
+                            <td style={{ padding: "9px 10px", fontWeight: 700, color: kqColor, fontSize: 13, whiteSpace: "nowrap" }}>
+                              {dong.ket_qua}
+                            </td>
+                            <td style={{ padding: "9px 14px", fontSize: 12, color: isSai ? "var(--accent)" : "var(--text3)", lineHeight: 1.5 }}>
+                              <Math text={dong.ghi_chu} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 )}
 
+                {/* Lỗi sai + gợi ý */}
                 {cau.loi_sai && (
-                  <div style={{ fontSize: 13, color: "var(--accent)", marginTop: 8, lineHeight: 1.6 }}>
-                    ✗ <strong>Lỗi sai:</strong> {cau.loi_sai}
+                  <div style={{ padding: "10px 16px", background: "#fff8f8", fontSize: 13, color: "var(--accent)", borderTop: "1px solid var(--border)" }}>
+                    ✗ <strong>Lỗi sai:</strong> <Math text={cau.loi_sai} />
                   </div>
                 )}
                 {cau.goi_y_sua && (
-                  <div style={{ fontSize: 13, color: "var(--blue)", marginTop: 4, lineHeight: 1.6 }}>
-                    💡 <strong>Gợi ý:</strong> {cau.goi_y_sua}
+                  <div style={{ padding: "10px 16px", background: "#f0f7ff", fontSize: 13, color: "var(--blue)", borderTop: "1px solid var(--border)" }}>
+                    💡 <strong>Gợi ý:</strong> <Math text={cau.goi_y_sua} />
                   </div>
                 )}
               </div>
@@ -175,32 +158,15 @@ export default function ResultPage({ result, onBack }) {
       {imageUrls && imageUrls.length > 0 && (
         <div className="card">
           <div className="card-title">🖼️ Bài làm học sinh</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {imageUrls.map((url, i) => (
-              <img
-                key={i}
-                src={`${API}${url}`}
-                alt={`Trang ${i + 1}`}
-                style={{ width: "100%", borderRadius: 8, border: "1px solid var(--border)" }}
-              />
-            ))}
-          </div>
+          {imageUrls.map((url, i) => (
+            <img key={i} src={`${API}${url}`} alt={`Trang ${i + 1}`} style={{ width: "100%", borderRadius: 8, border: "1px solid var(--border)", marginBottom: 8 }} />
+          ))}
         </div>
       )}
 
       <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
-        <button className="btn btn-outline" onClick={onBack} style={{ flex: 1, justifyContent: "center" }}>
-          ← Chấm bài khác
-        </button>
-        <a
-          href={`${API}/api/export/${resultId}/html`}
-          target="_blank"
-          rel="noreferrer"
-          className="btn btn-primary"
-          style={{ flex: 1, justifyContent: "center" }}
-        >
-          🖨️ In báo cáo PDF
-        </a>
+        <button className="btn btn-outline" onClick={onBack} style={{ flex: 1, justifyContent: "center" }}>← Chấm bài khác</button>
+        <a href={`${API}/api/export/${resultId}/html`} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }}>🖨️ In báo cáo PDF</a>
       </div>
     </div>
   );
