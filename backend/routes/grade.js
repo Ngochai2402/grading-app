@@ -7,7 +7,6 @@ const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
-// Cấu hình multer lưu ảnh bài làm
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, path.join(__dirname, '../uploads')),
   filename: (req, file, cb) => {
@@ -15,9 +14,10 @@ const storage = multer.diskStorage({
     cb(null, `${uuidv4()}${ext}`);
   }
 });
+
 const upload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp'];
     if (allowed.includes(file.mimetype)) cb(null, true);
@@ -25,207 +25,233 @@ const upload = multer({
   }
 });
 
-// POST /api/grade
-// Body: multipart/form-data
-//   - images[]: 1 hoặc nhiều ảnh bài làm
-//   - rubric: JSON string chứa đáp án + thang điểm
-//   - studentName: tên học sinh (optional)
-//   - subject: môn học (optional)
-router.post('/', (req, res, next) => {
-  upload.array('images[]', 20)(req, res, (err) => {
-    if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
-      upload.array('images', 20)(req, res, next);
-    } else {
-      next(err);
-    }
+function readImages(files) {
+  return files.map(file => ({
+    type: 'image',
+    source: { type: 'base64', media_type: file.mimetype, data: fs.readFileSync(file.path).toString('base64') }
+  }));
+}
+
+function uploadMiddleware(req, res, next) {
+  upload.array('images[]', 20)(req, res, err => {
+    if (err && err.code === 'LIMIT_UNEXPECTED_FILE') upload.array('images', 20)(req, res, next);
+    else next(err);
   });
-}, async (req, res) => {
+}
+
+// ── POST /api/grade/transcribe ── Giai đoạn 1: chỉ đọc & gõ lại
+router.post('/transcribe', uploadMiddleware, async (req, res) => {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
   try {
-    const { rubric: rubricStr, studentName = 'Học sinh', subject = 'Bài kiểm tra' } = req.body;
+    if (!req.files?.length) return res.status(400).json({ error: 'Vui lòng upload ít nhất 1 ảnh' });
+    const { subject = 'Toán' } = req.body;
+    const imageContents = readImages(req.files);
 
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: 'Vui lòng upload ít nhất 1 ảnh bài làm' });
-    }
-    if (!rubricStr) {
-      return res.status(400).json({ error: 'Vui lòng cung cấp rubric (đáp án + thang điểm)' });
-    }
-
-    let rubric;
-    try {
-      rubric = typeof rubricStr === 'string' ? JSON.parse(rubricStr) : rubricStr;
-    } catch {
-      return res.status(400).json({ error: 'Rubric không đúng định dạng JSON' });
-    }
-
-    // Đọc và encode ảnh sang base64
-    const imageContents = req.files.map(file => {
-      const imageData = fs.readFileSync(file.path);
-      const base64 = imageData.toString('base64');
-      const mediaType = file.mimetype;
-      return {
-        type: 'image',
-        source: { type: 'base64', media_type: mediaType, data: base64 }
-      };
-    });
-
-    // Xây dựng prompt chấm bài
-    const gradingPrompt = buildGradingPrompt(rubric, studentName, subject);
-
-    // Gọi Claude Vision
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 4096,
       temperature: 0,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            ...imageContents,
-            { type: 'text', text: gradingPrompt }
-          ]
-        }
-      ]
+      messages: [{
+        role: 'user',
+        content: [
+          ...imageContents,
+          { type: 'text', text: `Bạn là người đọc bài thi môn ${subject}. Nhiệm vụ DUY NHẤT: GÕ LẠI chính xác toàn bộ bài làm học sinh.
+
+NGUYÊN TẮC:
+- Gõ lại CHÍNH XÁC từng ký tự, số, công thức — không sửa, không thêm, không nhận xét
+- Giữ nguyên xuống dòng, thứ tự từng dòng
+- Ký hiệu toán: gõ đúng (x₁, √3, x², ≈, ⟹, △, ÷)
+- Chữ mờ/khó đọc: ghi [?]
+- Hình vẽ/đồ thị: mô tả ngắn trong [], ví dụ [Đồ thị: parabol qua O, (-2;8), (2;8)]
+
+Trả về JSON:
+\`\`\`json
+{"cac_cau":[{"so_cau":"Câu 1","noi_dung_goc":["dòng 1","dòng 2","..."]}]}
+\`\`\`` }
+        ]
+      }]
     });
 
-    // Parse kết quả JSON từ Claude
-    const rawText = response.content[0].text;
-    let gradingResult;
-    try {
-      const jsonMatch = rawText.match(/```json\n?([\s\S]*?)\n?```/) || rawText.match(/(\{[\s\S]*\})/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : rawText;
-      gradingResult = JSON.parse(jsonStr);
-    } catch {
-      return res.status(500).json({
-        error: 'Claude trả về kết quả không đúng định dạng',
-        raw: rawText
-      });
-    }
+    const raw = response.content[0].text;
+    const m = raw.match(/```json\n?([\s\S]*?)\n?```/) || raw.match(/(\{[\s\S]*\})/);
+    const transcribed = JSON.parse(m ? m[1] : raw);
 
-    // Lưu kết quả
-    const resultId = uuidv4();
-    const resultData = {
-      id: resultId,
-      studentName,
-      subject,
-      gradingResult,
-      imageFiles: req.files.map(f => f.filename),
-      rubric,
-      createdAt: new Date().toISOString()
-    };
-
-    const resultsDir = path.join(__dirname, '../results');
+    const sessionId = uuidv4();
+    const sessionsDir = path.join(__dirname, '../results/sessions');
+    if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
     fs.writeFileSync(
-      path.join(resultsDir, `${resultId}.json`),
-      JSON.stringify(resultData, null, 2)
+      path.join(sessionsDir, `${sessionId}.json`),
+      JSON.stringify({ sessionId, imageFiles: req.files.map(f => f.filename), transcribed, createdAt: new Date().toISOString() }, null, 2)
     );
 
-    res.json({
-      success: true,
-      resultId,
-      studentName,
-      subject,
-      gradingResult,
-      imageUrls: req.files.map(f => `/uploads/${f.filename}`)
-    });
-
+    res.json({ success: true, sessionId, transcribed, imageUrls: req.files.map(f => `/uploads/${f.filename}`) });
   } catch (error) {
-    console.error('Lỗi chấm bài:', error);
+    console.error('Lỗi transcribe:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/grade/:id — lấy kết quả đã chấm theo ID
-router.get('/:id', (req, res) => {
-  const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'Không tìm thấy kết quả' });
-  }
-  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  res.json(data);
-});
+// ── POST /api/grade/score ── Giai đoạn 2: chấm từng dòng
+router.post('/score', async (req, res) => {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  try {
+    const { sessionId, transcribed, rubric: rubricStr, studentName = 'Học sinh', subject = 'Bài kiểm tra' } = req.body;
+    if (!transcribed || !rubricStr) return res.status(400).json({ error: 'Thiếu nội dung bài làm hoặc rubric' });
 
-// GET /api/grade — danh sách bài đã chấm
-router.get('/', (req, res) => {
-  const resultsDir = path.join(__dirname, '../results');
-  const files = fs.readdirSync(resultsDir).filter(f => f.endsWith('.json'));
-  const list = files.map(f => {
-    const data = JSON.parse(fs.readFileSync(path.join(resultsDir, f), 'utf8'));
-    return {
-      id: data.id,
-      studentName: data.studentName,
-      subject: data.subject,
-      tongDiem: data.gradingResult?.tong_diem,
-      diemToiDa: data.gradingResult?.diem_toi_da,
-      createdAt: data.createdAt
-    };
-  });
-  list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.json(list);
-});
+    let rubric;
+    try { rubric = typeof rubricStr === 'string' ? JSON.parse(rubricStr) : rubricStr; }
+    catch { return res.status(400).json({ error: 'Rubric không đúng JSON' }); }
 
-function buildGradingPrompt(rubric, studentName, subject) {
-  return `Bạn là giáo viên Toán chuyên nghiệp. Hãy chấm bài làm của học sinh ${studentName} môn ${subject}.
+    const baiLamText = transcribed.cac_cau
+      .map(c => `${c.so_cau}:\n${c.noi_dung_goc.join('\n')}`)
+      .join('\n\n');
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 8192,
+      temperature: 0,
+      messages: [{
+        role: 'user',
+        content: `Bạn là giáo viên ${subject} chuyên nghiệp. Chấm bài của học sinh ${studentName}.
+
+=== BÀI LÀM HỌC SINH (đã gõ lại chính xác) ===
+${baiLamText}
 
 === RUBRIC ===
 ${JSON.stringify(rubric, null, 2)}
 
-=== CÁCH CHẤM BẮT BUỘC ===
-Với mỗi bài/câu, thực hiện theo đúng trình tự sau:
-
-BƯỚC 1 — CHÉP LẠI VÀ CHẤM TỪNG DÒNG:
-- Đọc và ghi lại CHÍNH XÁC từng dòng bài làm của học sinh (kể cả ký tự nhỏ nhất)
-- Ngay sau mỗi dòng, ghi nhận xét ngắn: ✓ đúng / ✗ sai (giải thích tại sao) / ~ chấp nhận được
-- Nếu dòng đó có lỗi: chỉ rõ sai ở đâu, đúng phải là gì
-
-BƯỚC 2 — TỔNG KẾT ĐIỂM TỪNG CÂU:
-- Dựa trên từng dòng đã chấm ở trên
-- Đối chiếu với tiêu chí trong rubric
-- Cho điểm từng tiêu chí
+=== CÁCH CHẤM TỪNG DÒNG ===
+Với mỗi câu:
+1. Lấy từng dòng bài làm học sinh (giữ nguyên chữ học sinh viết)
+2. Chấm NGAY dòng đó:
+   - ✓ Đúng — nếu đúng hoàn toàn
+   - ✗ Sai — nếu sai, kèm giải thích ngắn + kết quả đúng phải là gì
+   - ~ Chấp nhận — đúng nhưng còn thiếu sót nhỏ
+3. Tổng kết điểm từng tiêu chí
 
 NGUYÊN TẮC:
-- Chép lại đúng những gì học sinh viết, KHÔNG suy đoán hay thêm bớt
-- Nếu học sinh dùng cách khác đáp án nhưng đúng bản chất → vẫn cho điểm
-- Chỉ trừ điểm khi có lỗi SỰ THẬT trong bài
+- Cách trình bày khác đáp án nhưng bản chất toán đúng → ✓ cho điểm đầy đủ
+- Chỉ ✗ khi sai số, sai công thức, sai logic toán học thực sự
+- Khi không chắc → ưu tiên ✓
 
-=== ĐỊNH DẠNG ĐẦU RA ===
-Trả về JSON CHÍNH XÁC, không thêm text ngoài JSON:
-
+Trả về JSON:
 \`\`\`json
 {
-  "tong_diem": <số>,
-  "diem_toi_da": <số>,
-  "phan_tram": <số, 1 chữ số thập phân>,
-  "xep_loai": "<Giỏi/Khá/Trung bình/Yếu>",
-  "nhan_xet_chung": "<nhận xét tổng thể ngắn gọn>",
+  "tong_diem": 0,
+  "diem_toi_da": 0,
+  "phan_tram": 0.0,
+  "xep_loai": "Giỏi",
+  "nhan_xet_chung": "",
   "cac_cau": [
     {
-      "so_cau": "<Bài 1>",
-      "diem_dat": <số>,
-      "diem_toi_da": <số>,
-      "trang_thai": "<Đúng/Một phần/Sai/Bỏ trống>",
+      "so_cau": "Câu 1",
+      "diem_dat": 0,
+      "diem_toi_da": 0,
+      "trang_thai": "Đúng",
       "cham_tung_dong": [
         {
-          "dong": "<chép lại chính xác dòng học sinh viết>",
-          "ket_qua": "<✓ Đúng / ✗ Sai / ~ Chấp nhận>",
-          "ghi_chu": "<giải thích nếu sai hoặc cần lưu ý, để trống nếu đúng hoàn toàn>"
+          "dong": "dòng học sinh viết",
+          "ket_qua": "✓ Đúng",
+          "ghi_chu": ""
         }
       ],
       "diem_tieu_chi": [
-        {
-          "tieu_chi": "<tên tiêu chí từ rubric>",
-          "dat": <true/false>,
-          "diem": <điểm cho tiêu chí này>
-        }
+        { "tieu_chi": "tên tiêu chí", "dat": true, "diem": 0 }
       ],
-      "loi_sai": "<tóm tắt lỗi sai nếu có, để trống nếu đúng>",
-      "goi_y_sua": "<gợi ý sửa nếu có lỗi, để trống nếu đúng>"
+      "loi_sai": "",
+      "goi_y_sua": ""
     }
   ]
 }
-\`\`\``;
-}
+\`\`\``
+      }]
+    });
 
+    const raw = response.content[0].text;
+    const m = raw.match(/```json\n?([\s\S]*?)\n?```/) || raw.match(/(\{[\s\S]*\})/);
+    const gradingResult = JSON.parse(m ? m[1] : raw);
+
+    let imageFiles = [];
+    if (sessionId) {
+      const sp = path.join(__dirname, '../results/sessions', `${sessionId}.json`);
+      if (fs.existsSync(sp)) imageFiles = JSON.parse(fs.readFileSync(sp, 'utf8')).imageFiles;
+    }
+
+    const resultId = uuidv4();
+    const resultData = { id: resultId, studentName, subject, gradingResult, transcribed, imageFiles, rubric, createdAt: new Date().toISOString() };
+    fs.writeFileSync(path.join(__dirname, '../results', `${resultId}.json`), JSON.stringify(resultData, null, 2));
+
+    res.json({ success: true, resultId, studentName, subject, gradingResult, transcribed, imageUrls: imageFiles.map(f => `/uploads/${f}`) });
+  } catch (error) {
+    console.error('Lỗi chấm:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── POST /api/grade ── Tự động chạy 2 giai đoạn liên tiếp
+router.post('/', uploadMiddleware, async (req, res) => {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  try {
+    const { rubric: rubricStr, studentName = 'Học sinh', subject = 'Bài kiểm tra' } = req.body;
+    if (!req.files?.length) return res.status(400).json({ error: 'Vui lòng upload ít nhất 1 ảnh' });
+    if (!rubricStr) return res.status(400).json({ error: 'Vui lòng cung cấp rubric' });
+
+    let rubric;
+    try { rubric = JSON.parse(rubricStr); }
+    catch { return res.status(400).json({ error: 'Rubric không đúng JSON' }); }
+
+    const imageContents = readImages(req.files);
+
+    // Giai đoạn 1: Transcribe
+    const r1 = await client.messages.create({
+      model: 'claude-sonnet-4-6', max_tokens: 4096, temperature: 0,
+      messages: [{ role: 'user', content: [
+        ...imageContents,
+        { type: 'text', text: `Gõ lại CHÍNH XÁC từng dòng bài làm học sinh môn ${subject}. Không sửa, không nhận xét. Chữ khó đọc ghi [?]. Hình vẽ mô tả trong []. JSON: {"cac_cau":[{"so_cau":"Câu 1","noi_dung_goc":["dòng 1","dòng 2"]}]}` }
+      ]}]
+    });
+    const t1 = r1.content[0].text;
+    const m1 = t1.match(/```json\n?([\s\S]*?)\n?```/) || t1.match(/(\{[\s\S]*\})/);
+    const transcribed = JSON.parse(m1 ? m1[1] : t1);
+
+    const baiLamText = transcribed.cac_cau.map(c => `${c.so_cau}:\n${c.noi_dung_goc.join('\n')}`).join('\n\n');
+
+    // Giai đoạn 2: Chấm
+    const r2 = await client.messages.create({
+      model: 'claude-sonnet-4-6', max_tokens: 8192, temperature: 0,
+      messages: [{ role: 'user', content: `Giáo viên ${subject} chuyên nghiệp. Chấm bài ${studentName}.\n\n=== BÀI LÀM ===\n${baiLamText}\n\n=== RUBRIC ===\n${JSON.stringify(rubric, null, 2)}\n\nChấm từng dòng: ✓ Đúng / ✗ Sai (giải thích) / ~ Chấp nhận. Cách khác nhưng đúng → ✓. Trả về JSON đầy đủ với cham_tung_dong cho mỗi câu.` }]
+    });
+    const t2 = r2.content[0].text;
+    const m2 = t2.match(/```json\n?([\s\S]*?)\n?```/) || t2.match(/(\{[\s\S]*\})/);
+    const gradingResult = JSON.parse(m2 ? m2[1] : t2);
+
+    const resultId = uuidv4();
+    const resultData = { id: resultId, studentName, subject, gradingResult, transcribed, imageFiles: req.files.map(f => f.filename), rubric, createdAt: new Date().toISOString() };
+    fs.writeFileSync(path.join(__dirname, '../results', `${resultId}.json`), JSON.stringify(resultData, null, 2));
+
+    res.json({ success: true, resultId, studentName, subject, gradingResult, transcribed, imageUrls: req.files.map(f => `/uploads/${f.filename}`) });
+  } catch (error) {
+    console.error('Lỗi:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/grade/:id
+router.get('/:id', (req, res) => {
+  const fp = path.join(__dirname, '../results', `${req.params.id}.json`);
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Không tìm thấy' });
+  res.json(JSON.parse(fs.readFileSync(fp, 'utf8')));
+});
+
+// GET /api/grade
+router.get('/', (req, res) => {
+  const dir = path.join(__dirname, '../results');
+  const list = fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => {
+    const d = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    return { id: d.id, studentName: d.studentName, subject: d.subject, tongDiem: d.gradingResult?.tong_diem, diemToiDa: d.gradingResult?.diem_toi_da, createdAt: d.createdAt };
+  });
+  list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json(list);
+});
 
 module.exports = router;
