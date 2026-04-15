@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 
-const API = import.meta.env.VITE_API_URL || "https://grading-app-production-2949.up.railway.app";
+const API = "https://grading-app-production-2949.up.railway.app";
 
 const SAMPLE_RUBRIC = {
   ten_de: "Kiểm tra 15 phút - Đại số",
