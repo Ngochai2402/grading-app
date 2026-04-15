@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",
+    "@google/generative-ai": "^0.21.0",
     "canvas": "^2.11.2",
     "cors": "^2.8.5",
     "express": "^4.19.2",
