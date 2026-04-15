@@ -267,6 +267,38 @@ function mathToLatex(text) {
     .replace(/⟹/g, '\\(\\Rightarrow\\)').replace(/→/g, '\\(\\to\\)');
 }
 
+function mathToHtml(text) {
+  if (!text) return '';
+  const SUB = '₀₁₂₃₄₅₆₇₈₉';
+  let result = '';
+  let i = 0;
+  const tryKatex = (latex) => {
+    try { return `<span class="math">${latex}</span>`; }
+    catch { return latex; }
+  };
+  while (i < text.length) {
+    const ch = text[i];
+    const fracM = text.slice(i).match(/^(\d+)\/(\d+)/);
+    if (fracM) { result += tryKatex(`\\(\\dfrac{${fracM[1]}}{${fracM[2]}}\\)`); i += fracM[0].length; continue; }
+    if (/[a-zA-Z]/.test(ch) && i+1 < text.length && SUB.includes(text[i+1])) {
+      const sub = SUB.indexOf(text[i+1]);
+      result += tryKatex(`\\(${ch}_{${sub}}\\)`); i += 2; continue;
+    }
+    if (ch === '²') { result += tryKatex('\\(^2\\)'); i++; continue; }
+    if (ch === '³') { result += tryKatex('\\(^3\\)'); i++; continue; }
+    if (ch === '√') {
+      let num='', j=i+1;
+      while(j<text.length && /\d/.test(text[j])){num+=text[j];j++;}
+      result += tryKatex(`\\(\\sqrt{${num||''}}\\)`); i=j; continue;
+    }
+    const syms = {'Δ':'\\Delta','△':'\\Delta','≈':'\\approx','≤':'\\leq','≥':'\\geq','⟹':'\\Rightarrow','→':'\\to','≠':'\\neq','∈':'\\in'};
+    if (syms[ch]) { result += tryKatex(`\\(${syms[ch]}\\)`); i++; continue; }
+    result += ch.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    i++;
+  }
+  return result;
+}
+
 function buildAnnotationLines(gradingResult, transcribed) {
   const lines = [];
   if (!gradingResult?.cac_cau) return lines;
@@ -294,9 +326,9 @@ function generateReportHTML(data) {
       const bg = isSai ? '#fff5f5' : isDung ? '#f5fff8' : '#fffdf0';
       const kqColor = isSai ? '#c0392b' : isDung ? '#1b7a3e' : '#c47f17';
       return `<tr style="background:${bg}">
-        <td style="font-family:monospace;font-size:13px;padding:5px 10px;color:#222">${mathToLatex(d.dong || '')}</td>
+        <td style="font-size:13px;padding:7px 12px;color:#222;line-height:1.6">${mathToHtml(d.dong || '')}</td>
         <td style="font-weight:700;color:${kqColor};padding:5px 10px;white-space:nowrap">${d.ket_qua || ''}</td>
-        <td style="font-size:12px;color:#888;padding:5px 10px">${mathToLatex(d.ghi_chu || '')}</td>
+        <td style="font-size:12px;color:${isSai?'#c62828':'#555'};padding:7px 12px;line-height:1.6">${mathToHtml(d.ghi_chu || '')}</td>
       </tr>`;
     }).join('');
 
@@ -350,5 +382,181 @@ document.addEventListener("DOMContentLoaded", function() {
 </script>
 </body></html>`;
 }
+
+// GET /api/export/:id/pdf — xuất PDF đẹp qua LaTeX service
+router.get('/:id/pdf', async (req, res) => {
+  const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Không tìm thấy' });
+
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const latex = generateLatex(data);
+
+  try {
+    const LATEX_URL = process.env.LATEX_SERVICE_URL || 'https://overlef-my-production.up.railway.app/compile';
+    const fetch = (await import('node-fetch')).default;
+
+    const form = new URLSearchParams();
+    form.append('content', latex);
+    form.append('engine', 'xelatex');
+
+    const r = await fetch(LATEX_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+      timeout: 60000
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      return res.status(500).json({ error: 'LaTeX compile error', detail: errText.slice(0, 500) });
+    }
+
+    const pdfBuffer = await r.buffer();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="cham-bai-${req.params.id}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Lỗi xuất PDF:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+function escLat(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/\\/g, '\\textbackslash{}')
+    .replace(/&/g, '\\&').replace(/%/g, '\\%').replace(/\$/g, '\\$')
+    .replace(/#/g, '\\#').replace(/_/g, '\\_').replace(/\^/g, '\\^{}')
+    .replace(/\{/g, '\\{').replace(/\}/g, '\\}')
+    .replace(/~/g, '\\textasciitilde{}')
+    .replace(/</g, '\\textless{}').replace(/>/g, '\\textgreater{}');
+}
+
+function unicodeToLatex(s) {
+  if (!s) return '';
+  return s
+    .replace(/x₁x₂/g, '$x_1 x_2$').replace(/x₁/g, '$x_1$').replace(/x₂/g, '$x_2$')
+    .replace(/x₃/g, '$x_3$').replace(/x₄/g, '$x_4$')
+    .replace(/\(([^)]+)\)²/g, (m,p) => `$(${p})^2$`)
+    .replace(/([A-Za-z0-9])²/g, '$$$1^2$$').replace(/([A-Za-z0-9])³/g, '$$$1^3$$')
+    .replace(/√(\d+)/g, '$\\sqrt{$1}$')
+    .replace(/(\d+)\/(\d+)/g, '$\\frac{$1}{$2}$')
+    .replace(/Δ|△/g, '$\\Delta$').replace(/≈/g, '$\\approx$')
+    .replace(/≤/g, '$\\leq$').replace(/≥/g, '$\\geq$')
+    .replace(/⟹/g, '$\\Rightarrow$').replace(/→/g, '$\\to$')
+    .replace(/≠/g, '$\\neq$').replace(/∈/g, '$\\in$')
+    .replace(/&/g, '\\&').replace(/%/g, '\\%').replace(/#/g, '\\#')
+    .replace(/(?<!\$)_(?!\{)/g, '\\_');
+}
+
+function scoreColor(pct) {
+  if (pct >= 80) return 'colorGioi';
+  if (pct >= 60) return 'colorKha';
+  return 'colorYeu';
+}
+
+function generateLatex(data) {
+  const { studentName, subject, gradingResult, createdAt } = data;
+  const { tong_diem, diem_toi_da, phan_tram, xep_loai, nhan_xet_chung, cac_cau } = gradingResult;
+  const date = new Date(createdAt).toLocaleDateString('vi-VN');
+  const sc = scoreColor(phan_tram);
+
+  const cauBlocks = (cac_cau || []).map(cau => {
+    const pct2 = (cau.diem_dat / cau.diem_toi_da) * 100;
+    const cc = scoreColor(pct2);
+    const trangThai = cau.trang_thai === 'Đúng' ? '{\\color{colorGioi}\\textbf{✓ Đúng}}' :
+                      cau.trang_thai === 'Một phần' ? '{\\color{colorKha}\\textbf{◑ Một phần}}' :
+                      '{\\color{colorYeu}\\textbf{✗ Sai}}';
+
+    const dongRows = (cau.cham_tung_dong || []).map(d => {
+      const isDung = d.ket_qua?.includes('✓');
+      const isSai  = d.ket_qua?.includes('✗');
+      const kqColor = isDung ? '\\color{colorGioi}' : isSai ? '\\color{colorYeu}' : '\\color{colorKha}';
+      const rowBg = isDung ? '\\rowcolor{bgDung}' : isSai ? '\\rowcolor{bgSai}' : '\\rowcolor{bgChap}';
+      const ghiChu = d.ghi_chu ? `\\footnotesize{${unicodeToLatex(d.ghi_chu)}}` : '';
+      return `${rowBg} ${unicodeToLatex(d.dong || '')} & {${kqColor}\\textbf{${escLat(d.ket_qua || '')}}} & ${ghiChu} \\\\`;
+    }).join('\n');
+
+    const loiSai = cau.loi_sai ? `\\vspace{2pt}\\noindent{\\color{colorYeu}\\small ✗ \\textbf{Lỗi:} ${unicodeToLatex(cau.loi_sai)}}` : '';
+    const goiY   = cau.goi_y_sua ? `\\vspace{2pt}\\noindent{\\color{colorBlue}\\small 💡 ${unicodeToLatex(cau.goi_y_sua)}}` : '';
+
+    return `
+\\subsection*{\\color{${cc}}${escLat(cau.so_cau)} \\hfill ${cau.diem_dat}/${cau.diem_toi_da}đ \\quad ${trangThai}}
+\\vspace{-4pt}
+\\begin{longtable}{p{0.42\\textwidth} p{0.13\\textwidth} p{0.38\\textwidth}}
+\\hline
+\\rowcolor{bgHeader} \\textbf{Bài làm học sinh} & \\textbf{Kết quả} & \\textbf{Nhận xét} \\\\
+\\hline
+${dongRows}
+\\hline
+\\end{longtable}
+${loiSai}
+${goiY}
+\\vspace{4pt}`;
+  }).join('\n');
+
+  return `\\documentclass[12pt,a4paper]{article}
+\\usepackage{fontspec}
+\\usepackage{polyglossia}
+\\setmainlanguage{vietnamese}
+\\setmainfont{TeX Gyre Termes}
+\\usepackage{geometry}
+\\geometry{margin=2cm}
+\\usepackage{xcolor}
+\\usepackage{colortbl}
+\\usepackage{longtable}
+\\usepackage{booktabs}
+\\usepackage{amsmath,amssymb}
+\\usepackage{array}
+\\usepackage{parskip}
+\\usepackage{titlesec}
+\\usepackage{fancyhdr}
+\\usepackage{graphicx}
+
+% Màu sắc
+\\definecolor{colorGioi}{HTML}{1b7a3e}
+\\definecolor{colorKha}{HTML}{c47f17}
+\\definecolor{colorYeu}{HTML}{c0392b}
+\\definecolor{colorBlue}{HTML}{1565c0}
+\\definecolor{bgHeader}{HTML}{f0f0f0}
+\\definecolor{bgDung}{HTML}{f0fff4}
+\\definecolor{bgSai}{HTML}{fff5f5}
+\\definecolor{bgChap}{HTML}{fffdf0}
+\\definecolor{accentBar}{HTML}{${phan_tram >= 80 ? '1b7a3e' : phan_tram >= 60 ? 'c47f17' : 'c0392b'}}
+
+\\pagestyle{fancy}
+\\fancyhf{}
+\\rhead{\\small ${escLat(subject)} · ${escLat(date)}}
+\\lhead{\\small \\textbf{${escLat(studentName)}}}
+\\rfoot{\\small Trang \\thepage}
+
+\\begin{document}
+
+% ── TRANG BÌA ─────────────────────────────────────────────────────────────────
+\\begin{center}
+  \\rule{\\textwidth}{2pt}\\\\[6pt]
+  {\\Large\\textbf{KẾT QUẢ CHẤM BÀI}}\\\\[4pt]
+  {\\large ${escLat(subject)}}\\\\[2pt]
+  {\\small ${escLat(date)}}\\\\[8pt]
+  \\rule{\\textwidth}{0.5pt}\\\\[8pt]
+  {\\LARGE\\textbf{${escLat(studentName)}}}\\\\[12pt]
+  {\\fontsize{56}{60}\\selectfont\\color{accentBar}\\textbf{${tong_diem}}}%
+  {\\Large\\color{gray}/${diem_toi_da}}\\\\[4pt]
+  {\\large\\color{accentBar}\\textbf{${phan_tram}\\% · ${escLat(xep_loai)}}}\\\\[10pt]
+  \\rule{\\textwidth}{0.5pt}
+\\end{center}
+
+\\vspace{8pt}
+\\noindent\\colorbox{bgHeader}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small ${unicodeToLatex(nhan_xet_chung)}}}
+\\vspace{12pt}
+
+% ── CHI TIẾT ──────────────────────────────────────────────────────────────────
+\\section*{Chi tiết chấm từng dòng}
+
+${cauBlocks}
+
+\\end{document}`;
+}
+
 
 module.exports = router;
