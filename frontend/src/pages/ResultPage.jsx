@@ -71,18 +71,51 @@ export default function ResultPage({ result, onBack }) {
                   <div style={{ background: c, height: 6, borderRadius: 4, width: `${Math.min(pct, 100)}%`, transition: "width 0.5s" }} />
                 </div>
 
-                {cau.nhan_xet && (
-                  <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: cau.loi_sai ? 6 : 0, lineHeight: 1.6 }}>
-                    💬 {cau.nhan_xet}
+                {/* CHẤM TỪNG DÒNG */}
+                {cau.cham_tung_dong && cau.cham_tung_dong.length > 0 && (
+                  <div style={{ marginTop: 10, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                    <div style={{ background: "var(--surface2)", padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      Chi tiết từng dòng
+                    </div>
+                    {cau.cham_tung_dong.map((dong, j) => {
+                      const isDung = dong.ket_qua && dong.ket_qua.includes("✓");
+                      const isSai = dong.ket_qua && dong.ket_qua.includes("✗");
+                      return (
+                        <div key={j} style={{
+                          display: "grid", gridTemplateColumns: "1fr auto",
+                          gap: 8, padding: "8px 12px",
+                          borderTop: j > 0 ? "1px solid var(--border)" : "none",
+                          background: isSai ? "#fff8f8" : isDung ? "#f8fff9" : "var(--surface)"
+                        }}>
+                          <div>
+                            <div style={{ fontFamily: "monospace", fontSize: 13, color: "var(--text)", marginBottom: dong.ghi_chu ? 3 : 0 }}>
+                              {dong.dong}
+                            </div>
+                            {dong.ghi_chu && (
+                              <div style={{ fontSize: 12, color: isSai ? "var(--accent)" : "var(--text3)", lineHeight: 1.5 }}>
+                                {dong.ghi_chu}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{
+                            fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
+                            color: isSai ? "var(--accent)" : isDung ? "var(--green)" : "var(--amber)"
+                          }}>
+                            {dong.ket_qua}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
+
                 {cau.loi_sai && (
-                  <div style={{ fontSize: 13, color: "var(--accent)", marginBottom: cau.goi_y_sua ? 6 : 0, lineHeight: 1.6 }}>
+                  <div style={{ fontSize: 13, color: "var(--accent)", marginTop: 8, lineHeight: 1.6 }}>
                     ✗ <strong>Lỗi sai:</strong> {cau.loi_sai}
                   </div>
                 )}
                 {cau.goi_y_sua && (
-                  <div style={{ fontSize: 13, color: "var(--blue)", lineHeight: 1.6 }}>
+                  <div style={{ fontSize: 13, color: "var(--blue)", marginTop: 4, lineHeight: 1.6 }}>
                     💡 <strong>Gợi ý:</strong> {cau.goi_y_sua}
                   </div>
                 )}
