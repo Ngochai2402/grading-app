@@ -1,4 +1,4 @@
-const API = import.meta.env.VITE_API_URL || "https://grading-app-production-2949.up.railway.app";
+const API = "https://grading-app-production-2949.up.railway.app";
 
 export default function ResultPage({ result, onBack }) {
   const { studentName, subject, gradingResult, imageUrls, resultId } = result;
