@@ -18,7 +18,14 @@ const RESULTS_DIR = path.join(__dirname, 'results');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
-app.use(cors({ origin: 'http://localhost:3000' }));
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    /\.railway\.app$/,
+    /\.up\.railway\.app$/
+  ],
+  credentials: true
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use('/uploads', express.static(UPLOADS_DIR));
 app.use('/results', express.static(RESULTS_DIR));
