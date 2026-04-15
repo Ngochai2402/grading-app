@@ -170,14 +170,29 @@ function buildGradingPrompt(rubric, studentName, subject) {
 === RUBRIC (ĐÁP ÁN + THANG ĐIỂM) ===
 ${JSON.stringify(rubric, null, 2)}
 
-=== QUY TẮC CHẤM BẮT BUỘC ===
-1. ĐỌC TOÀN BỘ bài giải từng câu từ đầu đến cuối TRƯỚC KHI chấm
-2. Đọc kỹ từng dòng, từng bước, kể cả ký hiệu toán học, phân số, chữ nhỏ
-3. Nếu học sinh trình bày KHÁC đáp án nhưng KẾT QUẢ CUỐI ĐÚNG → CHO ĐIỂM TỐI ĐA
-4. Nếu học sinh có đủ ý và kết quả đúng → CHO ĐIỂM ĐẦY ĐỦ dù cách viết khác
-5. CHỈ trừ điểm khi học sinh THỰC SỰ tính sai hoặc BỎ TRỐNG hoàn toàn
-6. KHÔNG suy đoán thiếu bước nếu kết quả đúng đã có trong bài
-7. Khi không chắc chắn → ưu tiên cho học sinh điểm cao hơn
+=== CÁCH CHẤM NHƯ GIÁO VIÊN TOÁN CHUYÊN NGHIỆP ===
+
+BƯỚC 1 — ĐỌC BÀI TRƯỚC KHI CHẤM:
+- Đọc TOÀN BỘ bài giải của học sinh từ đầu đến cuối
+- Hiểu học sinh đang dùng phương pháp gì, hướng giải nào
+- Ghi nhận tất cả các bước, kết quả có trong bài
+
+BƯỚC 2 — ĐÁNH GIÁ TỪNG TIÊU CHÍ:
+- Đối chiếu từng tiêu chí trong rubric với bài làm
+- Nếu học sinh đạt tiêu chí đó (dù cách viết khác) → cho điểm tiêu chí đó
+- Một bước được coi là đúng khi: kết quả đúng HOẶC lập luận đúng
+
+BƯỚC 3 — NGUYÊN TẮC CHẤM CÔNG BẰNG:
+- Cách trình bày khác đáp án nhưng bản chất toán học đúng → KHÔNG trừ điểm
+- Học sinh dùng phương pháp khác (ngắn hơn/dài hơn) mà đúng → CHO ĐIỂM ĐẦY ĐỦ
+- Chỉ trừ điểm khi: tính sai số, sai công thức, thiếu kết luận quan trọng, bỏ trống
+- Sai nhỏ về trình bày (thiếu đơn vị, viết tắt) → trừ tối đa 0.25đ/câu
+- Khi chữ viết khó đọc nhưng suy ra được kết quả đúng → cho điểm
+
+BƯỚC 4 — NHẬN XÉT CHUYÊN NGHIỆP:
+- Ghi nhận cụ thể những gì học sinh làm đúng
+- Nếu có lỗi: chỉ ra đúng chỗ sai, giải thích tại sao sai
+- Gợi ý sửa ngắn gọn, đúng trọng tâm
 
 === ĐỊNH DẠNG ĐẦU RA ===
 Trả về JSON CHÍNH XÁC theo cấu trúc sau, không thêm text ngoài JSON:
