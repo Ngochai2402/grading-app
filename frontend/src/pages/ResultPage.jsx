@@ -26,6 +26,13 @@ export default function ResultPage({ result, onBack }) {
           <div style={{ fontSize: 13, color: "var(--text2)" }}>{studentName} • {subject}</div>
         </div>
         <a
+          href={`${API}/api/export/${resultId}/annotated-all`}
+          target="_blank"
+          rel="noreferrer"
+          className="btn btn-outline"
+          style={{ fontSize: 13, marginRight: 8 }}
+        >📝 Bài đã chấm</a>
+        <a
           href={`${API}/api/export/${resultId}/html`}
           target="_blank"
           rel="noreferrer"
