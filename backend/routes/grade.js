@@ -166,60 +166,66 @@ router.get('/', (req, res) => {
 });
 
 function buildGradingPrompt(rubric, studentName, subject) {
-  return `Bạn là giáo viên chấm bài môn ${subject}. Hãy chấm bài làm của học sinh ${studentName}.
+  return `Bạn là giáo viên Toán chuyên nghiệp. Hãy chấm bài làm của học sinh ${studentName} môn ${subject}.
 
-=== RUBRIC (ĐÁP ÁN + THANG ĐIỂM) ===
+=== RUBRIC ===
 ${JSON.stringify(rubric, null, 2)}
 
-=== CÁCH CHẤM NHƯ GIÁO VIÊN TOÁN CHUYÊN NGHIỆP ===
+=== CÁCH CHẤM BẮT BUỘC ===
+Với mỗi bài/câu, thực hiện theo đúng trình tự sau:
 
-BƯỚC 1 — ĐỌC BÀI TRƯỚC KHI CHẤM:
-- Đọc TOÀN BỘ bài giải của học sinh từ đầu đến cuối
-- Hiểu học sinh đang dùng phương pháp gì, hướng giải nào
-- Ghi nhận tất cả các bước, kết quả có trong bài
+BƯỚC 1 — CHÉP LẠI VÀ CHẤM TỪNG DÒNG:
+- Đọc và ghi lại CHÍNH XÁC từng dòng bài làm của học sinh (kể cả ký tự nhỏ nhất)
+- Ngay sau mỗi dòng, ghi nhận xét ngắn: ✓ đúng / ✗ sai (giải thích tại sao) / ~ chấp nhận được
+- Nếu dòng đó có lỗi: chỉ rõ sai ở đâu, đúng phải là gì
 
-BƯỚC 2 — ĐÁNH GIÁ TỪNG TIÊU CHÍ:
-- Đối chiếu từng tiêu chí trong rubric với bài làm
-- Nếu học sinh đạt tiêu chí đó (dù cách viết khác) → cho điểm tiêu chí đó
-- Một bước được coi là đúng khi: kết quả đúng HOẶC lập luận đúng
+BƯỚC 2 — TỔNG KẾT ĐIỂM TỪNG CÂU:
+- Dựa trên từng dòng đã chấm ở trên
+- Đối chiếu với tiêu chí trong rubric
+- Cho điểm từng tiêu chí
 
-BƯỚC 3 — NGUYÊN TẮC CHẤM CÔNG BẰNG:
-- Cách trình bày khác đáp án nhưng bản chất toán học đúng → KHÔNG trừ điểm
-- Học sinh dùng phương pháp khác (ngắn hơn/dài hơn) mà đúng → CHO ĐIỂM ĐẦY ĐỦ
-- Chỉ trừ điểm khi: tính sai số, sai công thức, thiếu kết luận quan trọng, bỏ trống
-- Sai nhỏ về trình bày (thiếu đơn vị, viết tắt) → trừ tối đa 0.25đ/câu
-- Khi chữ viết khó đọc nhưng suy ra được kết quả đúng → cho điểm
-
-BƯỚC 4 — NHẬN XÉT CHUYÊN NGHIỆP:
-- Ghi nhận cụ thể những gì học sinh làm đúng
-- Nếu có lỗi: chỉ ra đúng chỗ sai, giải thích tại sao sai
-- Gợi ý sửa ngắn gọn, đúng trọng tâm
+NGUYÊN TẮC:
+- Chép lại đúng những gì học sinh viết, KHÔNG suy đoán hay thêm bớt
+- Nếu học sinh dùng cách khác đáp án nhưng đúng bản chất → vẫn cho điểm
+- Chỉ trừ điểm khi có lỗi SỰ THẬT trong bài
 
 === ĐỊNH DẠNG ĐẦU RA ===
-Trả về JSON CHÍNH XÁC theo cấu trúc sau, không thêm text ngoài JSON:
+Trả về JSON CHÍNH XÁC, không thêm text ngoài JSON:
 
 \`\`\`json
 {
-  "tong_diem": <số điểm tổng>,
-  "diem_toi_da": <tổng điểm tối đa>,
-  "phan_tram": <phần trăm điểm, làm tròn 1 chữ số thập phân>,
+  "tong_diem": <số>,
+  "diem_toi_da": <số>,
+  "phan_tram": <số, 1 chữ số thập phân>,
   "xep_loai": "<Giỏi/Khá/Trung bình/Yếu>",
-  "nhan_xet_chung": "<nhận xét tổng thể về bài làm>",
+  "nhan_xet_chung": "<nhận xét tổng thể ngắn gọn>",
   "cac_cau": [
     {
-      "so_cau": "<ví dụ: Câu 1>",
-      "diem_dat": <điểm đạt được>,
-      "diem_toi_da": <điểm tối đa câu này>,
+      "so_cau": "<Bài 1>",
+      "diem_dat": <số>,
+      "diem_toi_da": <số>,
       "trang_thai": "<Đúng/Một phần/Sai/Bỏ trống>",
-      "nhan_xet": "<nhận xét cụ thể: học sinh làm gì đúng, sai ở đâu>",
-      "loi_sai": "<mô tả lỗi sai nếu có, để trống nếu đúng>",
-      "goi_y_sua": "<gợi ý cách sửa nếu có lỗi>"
+      "cham_tung_dong": [
+        {
+          "dong": "<chép lại chính xác dòng học sinh viết>",
+          "ket_qua": "<✓ Đúng / ✗ Sai / ~ Chấp nhận>",
+          "ghi_chu": "<giải thích nếu sai hoặc cần lưu ý, để trống nếu đúng hoàn toàn>"
+        }
+      ],
+      "diem_tieu_chi": [
+        {
+          "tieu_chi": "<tên tiêu chí từ rubric>",
+          "dat": <true/false>,
+          "diem": <điểm cho tiêu chí này>
+        }
+      ],
+      "loi_sai": "<tóm tắt lỗi sai nếu có, để trống nếu đúng>",
+      "goi_y_sua": "<gợi ý sửa nếu có lỗi, để trống nếu đúng>"
     }
   ]
 }
-\`\`\`
-
-Lưu ý: Nếu không đọc được một phần bài làm, ghi rõ trong nhan_xet. Chấm công bằng và khách quan.`;
+\`\`\``;
 }
+
 
 module.exports = router;
