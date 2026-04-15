@@ -36,7 +36,7 @@ function uploadMiddleware(req, res, next) {
 // ── GIAI ĐOẠN 1: Gemini đọc & gõ lại chữ viết tay ──────────────────────────
 async function transcribeWithGemini(files, subject) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
   // Chuẩn bị ảnh cho Gemini
   const imageParts = files.map(file => ({
@@ -80,8 +80,21 @@ Trả về JSON (không thêm text nào khác):
 }
 \`\`\``;
 
-  const result = await model.generateContent([prompt, ...imageParts]);
-  const text = result.response.text();
+  // Retry tối đa 3 lần nếu 503
+  let text = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await model.generateContent([prompt, ...imageParts]);
+      text = result.response.text();
+      break;
+    } catch (err) {
+      if (attempt === 3) throw err;
+      const isOverload = err.message?.includes('503') || err.message?.includes('overloaded') || err.message?.includes('unavailable');
+      if (!isOverload) throw err;
+      console.log(`Gemini 503, thử lại lần ${attempt + 1}...`);
+      await new Promise(r => setTimeout(r, 3000 * attempt));
+    }
+  }
   const m = text.match(/```json\n?([\s\S]*?)\n?```/) || text.match(/(\{[\s\S]*\})/);
   return JSON.parse(m ? m[1] : text);
 }
