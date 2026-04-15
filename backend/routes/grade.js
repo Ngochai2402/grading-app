@@ -31,7 +31,15 @@ const upload = multer({
 //   - rubric: JSON string chứa đáp án + thang điểm
 //   - studentName: tên học sinh (optional)
 //   - subject: môn học (optional)
-router.post('/', upload.array('images', 20), async (req, res) => {
+router.post('/', (req, res, next) => {
+  upload.array('images[]', 20)(req, res, (err) => {
+    if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
+      upload.array('images', 20)(req, res, next);
+    } else {
+      next(err);
+    }
+  });
+}, async (req, res) => {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   try {
