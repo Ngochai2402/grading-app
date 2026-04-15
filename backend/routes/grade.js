@@ -36,7 +36,7 @@ function uploadMiddleware(req, res, next) {
 // ── GIAI ĐOẠN 1: Gemini đọc & gõ lại chữ viết tay ──────────────────────────
 async function transcribeWithGemini(files, subject) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
   // Chuẩn bị ảnh cho Gemini
   const imageParts = files.map(file => ({
@@ -46,18 +46,24 @@ async function transcribeWithGemini(files, subject) {
     }
   }));
 
-  const prompt = `Bạn là chuyên gia OCR bài thi môn ${subject} bằng tiếng Việt.
+  const prompt = `Bạn là chuyên gia OCR bài thi môn ${subject} bằng tiếng Việt, đặc biệt giỏi đọc ký hiệu toán học viết tay.
 Nhiệm vụ DUY NHẤT: GÕ LẠI chính xác toàn bộ nội dung bài làm học sinh trong ảnh.
 
-NGUYÊN TẮC TUYỆT ĐỐI:
-- Gõ lại CHÍNH XÁC từng ký tự, số, ký hiệu toán học — KHÔNG sửa, KHÔNG thêm, KHÔNG nhận xét
-- Giữ nguyên cấu trúc xuống dòng như trong ảnh
-- Ký hiệu toán: gõ đúng (x₁, x₂, √3, x², ≈, ⟹, △, ÷, ×, ≤, ≥)
-- Phân số: gõ dạng a/b hoặc (a/b)
-- Chữ mờ hoặc không đọc được: ghi [?]
-- Hình vẽ/đồ thị: mô tả ngắn trong ngoặc [], ví dụ [Đồ thị parabol qua O, (-2;8), (2;8)]
-- Gạch ngang, gạch dưới: ghi [gạch ngang] hoặc [gạch dưới]
-- Nếu có nhiều ảnh: gõ lại tuần tự từng ảnh, phân biệt bằng [Trang 1], [Trang 2]...
+CHÚ Ý ĐẶC BIỆT VỀ KÝ HIỆU TOÁN (dễ nhầm nhất):
+- Phân số: phân biệt rõ tử số và mẫu số. Ví dụ: 7/2 là bảy phần hai, KHÔNG phải (-7)
+- Số âm vs phân số: "-7" khác hoàn toàn với "7/2". Đọc kỹ có gạch ngang ngang (âm) hay gạch ngang dọc (phân số)
+- Chỉ số dưới: x₁, x₂ — chữ số nhỏ phía dưới bên phải
+- Chỉ số trên (lũy thừa): x², (7/2)² — chữ số nhỏ phía trên bên phải
+- Ngoặc: phân biệt (7/2)² với (-7)² — trong ngoặc là gì phải đọc thật kỹ
+- Dấu nhân: 3.2 nghĩa là 3×2=6, không phải số thập phân 3.2
+- Công thức Vi-et: x₁+x₂ = -b/a, x₁x₂ = c/a
+
+NGUYÊN TẮC:
+- Gõ lại CHÍNH XÁC từng ký tự — KHÔNG sửa, KHÔNG thêm, KHÔNG nhận xét
+- Giữ nguyên xuống dòng như trong ảnh
+- Chữ mờ không đọc được: ghi [?]
+- Hình vẽ/đồ thị: mô tả ngắn trong [], ví dụ [Đồ thị parabol qua O, (-2;8), (2;8)]
+- Nhiều ảnh: phân biệt [Trang 1], [Trang 2]...
 
 Trả về JSON (không thêm text nào khác):
 \`\`\`json
