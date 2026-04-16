@@ -3,6 +3,15 @@ const path = require('path');
 const fs = require('fs');
 const { createCanvas, loadImage } = require('canvas');
 
+// ═══ FIX PDF LATEX COMPILE ERROR ═══
+// Thay thế escLat và unicodeToLatex cũ bằng module latex-utils mới
+// Module này xử lý đúng:
+//   - \frac, \sqrt, \Delta và các LaTeX command Claude sinh ra
+//   - Δ, x², x₁, √21 và các ký tự Unicode
+//   - Sanitize lệnh sai (\bet → \beta, \mathttt → \mathtt)
+//   - Escape an toàn ký tự đặc biệt LaTeX
+const { textToLatex, textToLatexPlain } = require('./latex-utils');
+
 const router = express.Router();
 
 // GET /api/export/:id/html — báo cáo HTML
@@ -66,7 +75,6 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
   const W = Math.round(img.width * scale);
   const H = Math.round(img.height * scale);
 
-  // Tính số dòng annotation cần thiết
   const { gradingResult, transcribed } = data;
   const allLines = buildAnnotationLines(gradingResult, transcribed);
   const HEADER_H = 90;
@@ -88,7 +96,6 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
   ctx.lineWidth = 4;
   ctx.strokeRect(0, 0, W, HEADER_H);
 
-  // Điểm lớn
   ctx.font = 'bold 42px sans-serif';
   ctx.fillStyle = scoreColor;
   ctx.fillText(`${tong_diem}/${diem_toi_da}`, 16, 52);
@@ -97,7 +104,6 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
   ctx.fillStyle = scoreColor;
   ctx.fillText(`${phan_tram}%  ·  ${xep_loai}`, 16, 78);
 
-  // Điểm từng câu ở header
   const cac_cau = gradingResult.cac_cau || [];
   let xPos = 200;
   ctx.font = '13px sans-serif';
@@ -114,7 +120,7 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
   // ── ẢNH GỐC ──
   ctx.drawImage(img, 0, HEADER_H, W, H);
 
-  // ── ANNOTATION TRÊN ẢNH: gạch dưới từng câu + ghi điểm bên phải ──
+  // ── ANNOTATION TRÊN ẢNH ──
   if (cac_cau.length > 0) {
     const sectionH = H / cac_cau.length;
     cac_cau.forEach((cau, i) => {
@@ -122,7 +128,6 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
       const pct = cau.diem_dat / cau.diem_toi_da;
       const c = pct >= 0.8 ? '#1b7a3e' : pct >= 0.4 ? '#e67e22' : '#c0392b';
 
-      // Đường kẻ phân cách câu (trừ câu đầu)
       if (i > 0) {
         ctx.strokeStyle = 'rgba(180,0,0,0.3)';
         ctx.lineWidth = 1;
@@ -134,7 +139,6 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
         ctx.setLineDash([]);
       }
 
-      // Badge điểm bên phải
       const badge = ` ${cau.diem_dat}/${cau.diem_toi_da} `;
       ctx.font = 'bold 15px sans-serif';
       const bw = ctx.measureText(badge).width + 10;
@@ -150,7 +154,6 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
       ctx.fillStyle = '#ffffff';
       ctx.fillText(badge, bx + 5, by + 16);
 
-      // Tên câu
       ctx.font = 'bold 14px sans-serif';
       ctx.fillStyle = c;
       ctx.fillText(cau.so_cau, 8, y + 22);
@@ -175,7 +178,6 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
     for (const line of allLines) {
       if (ly > fy + FOOTER_H - 10) break;
 
-      // Màu theo kết quả
       const isDung = line.ket_qua?.includes('✓');
       const isSai = line.ket_qua?.includes('✗');
       const bgColor = isSai ? '#fff0f0' : isDung ? '#f0fff4' : '#fffbf0';
@@ -183,18 +185,15 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
       ctx.fillStyle = bgColor;
       ctx.fillRect(0, ly - 12, W, 20);
 
-      // Nội dung dòng
       ctx.fillStyle = '#222';
       const dongText = line.dong?.substring(0, 60) || '';
       ctx.fillText(dongText, 12, ly);
 
-      // Kết quả
       const kqColor = isSai ? '#c0392b' : isDung ? '#1b7a3e' : '#c47f17';
       ctx.fillStyle = kqColor;
       ctx.font = 'bold 12px sans-serif';
       ctx.fillText(line.ket_qua || '', W - 100, ly);
 
-      // Ghi chú nếu có
       if (line.ghi_chu && isSai) {
         ctx.font = '11px sans-serif';
         ctx.fillStyle = '#c0392b';
@@ -212,7 +211,6 @@ async function createAnnotatedImage(imagePath, data, outputPath) {
 }
 
 async function createAllAnnotated(data, outputPath) {
-  // Gộp tất cả ảnh thành 1 file dài
   const images = [];
   for (const f of data.imageFiles) {
     const p = path.join(__dirname, '../uploads', f);
@@ -229,7 +227,6 @@ async function createAllAnnotated(data, outputPath) {
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, maxW, totalH + HEADER_H);
 
-  // Header
   const { tong_diem, diem_toi_da, phan_tram, xep_loai } = data.gradingResult;
   const sc = phan_tram >= 80 ? '#1b7a3e' : phan_tram >= 60 ? '#c47f17' : '#c0392b';
   ctx.fillStyle = phan_tram >= 80 ? '#eafaf1' : phan_tram >= 60 ? '#fef9e7' : '#fdedec';
@@ -252,21 +249,7 @@ async function createAllAnnotated(data, outputPath) {
   fs.writeFileSync(outputPath, canvas.toBuffer('image/png'));
 }
 
-function mathToLatex(text) {
-  if (!text) return '';
-  return text
-    .replace(/x₁x₂/g, '\\(x_1 x_2\\)').replace(/x₁/g, '\\(x_1\\)').replace(/x₂/g, '\\(x_2\\)')
-    .replace(/x₃/g, '\\(x_3\\)').replace(/x₄/g, '\\(x_4\\)')
-    .replace(/\(([^)]+)\)²/g, (m,p1) => `\\((${p1})^2\\)`)
-    .replace(/([A-Za-z0-9])²/g, '\\($1^2\\)')
-    .replace(/([A-Za-z0-9])³/g, '\\($1^3\\)')
-    .replace(/√(\d+)/g, '\\(\\sqrt{$1}\\)')
-    .replace(/(\d+)\/(\d+)/g, '\\(\\dfrac{$1}{$2}\\)')
-    .replace(/[Δ△]/g, '\\(\\Delta\\)')
-    .replace(/≈/g, '\\(\\approx\\)').replace(/≤/g, '\\(\\leq\\)').replace(/≥/g, '\\(\\geq\\)')
-    .replace(/⟹/g, '\\(\\Rightarrow\\)').replace(/→/g, '\\(\\to\\)');
-}
-
+// ─── Chuyển Unicode → HTML (giữ nguyên hàm cũ vì HTML không bị lỗi) ──────────
 function mathToHtml(text) {
   if (!text) return '';
   const SUB = '₀₁₂₃₄₅₆₇₈₉';
@@ -291,7 +274,7 @@ function mathToHtml(text) {
       while(j<text.length && /\d/.test(text[j])){num+=text[j];j++;}
       result += tryKatex(`\\(\\sqrt{${num||''}}\\)`); i=j; continue;
     }
-    const syms = {'Δ':'\\Delta','△':'\\Delta','≈':'\\approx','≤':'\\leq','≥':'\\geq','⟹':'\\Rightarrow','→':'\\to','≠':'\\neq','∈':'\\in'};
+    const syms = {'Δ':'\\Delta','△':'\\triangle','≈':'\\approx','≤':'\\leq','≥':'\\geq','⟹':'\\Rightarrow','⇒':'\\Rightarrow','→':'\\to','≠':'\\neq','∈':'\\in','⊥':'\\perp','∥':'\\parallel','∽':'\\sim','·':'\\cdot','π':'\\pi'};
     if (syms[ch]) { result += tryKatex(`\\(${syms[ch]}\\)`); i++; continue; }
     result += ch.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     i++;
@@ -311,6 +294,7 @@ function buildAnnotationLines(gradingResult, transcribed) {
   return lines;
 }
 
+// ─── HTML report (giữ nguyên hàm cũ) ──────────────────────────────────────────
 function generateReportHTML(data) {
   const { studentName, subject, gradingResult, imageFiles, transcribed, createdAt } = data;
   const { tong_diem, diem_toi_da, phan_tram, xep_loai, nhan_xet_chung, cac_cau } = gradingResult;
@@ -325,8 +309,9 @@ function generateReportHTML(data) {
       const isSai = d.ket_qua?.includes('✗');
       const bg = isSai ? '#fff5f5' : isDung ? '#f5fff8' : '#fffdf0';
       const kqColor = isSai ? '#c0392b' : isDung ? '#1b7a3e' : '#c47f17';
+      const canhBao = d.canh_bao ? `<div style="background:#fff3cd;border-left:3px solid #f0ad4e;padding:4px 8px;margin-top:4px;font-size:11px;color:#856404">⚠️ ${d.canh_bao}</div>` : '';
       return `<tr style="background:${bg}">
-        <td style="font-size:13px;padding:7px 12px;color:#222;line-height:1.6">${mathToHtml(d.dong || '')}</td>
+        <td style="font-size:13px;padding:7px 12px;color:#222;line-height:1.6">${mathToHtml(d.dong || '')}${canhBao}</td>
         <td style="font-weight:700;color:${kqColor};padding:5px 10px;white-space:nowrap">${d.ket_qua || ''}</td>
         <td style="font-size:12px;color:${isSai?'#c62828':'#555'};padding:7px 12px;line-height:1.6">${mathToHtml(d.ghi_chu || '')}</td>
       </tr>`;
@@ -347,6 +332,13 @@ function generateReportHTML(data) {
     `<img src="/uploads/${f}" style="max-width:100%;border-radius:8px;border:1px solid #ddd;margin-bottom:10px">`
   ).join('');
 
+  // Cảnh báo integrity nếu có
+  const integrityBanner = gradingResult.kiem_tra_toan_ven?.co_vi_pham
+    ? `<div style="background:#fff3cd;border-left:4px solid #f0ad4e;padding:12px 16px;margin-bottom:16px;border-radius:6px;color:#856404;font-size:13px">
+         <strong>⚠️ Lưu ý:</strong> ${gradingResult.kiem_tra_toan_ven.canh_bao_chung}
+       </div>`
+    : '';
+
   return `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8">
 <title>Kết quả - ${studentName}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -356,6 +348,7 @@ function generateReportHTML(data) {
 .wrap{max-width:860px;margin:0 auto;padding:24px}.card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #eee}
 @media print{body{background:#fff}.no-print{display:none}}</style></head><body>
 <div class="wrap">
+  ${integrityBanner}
   <div class="card" style="border-left:6px solid ${sc}">
     <div style="font-size:13px;color:#888">${subject} · ${new Date(createdAt).toLocaleString('vi-VN')}</div>
     <div style="font-size:22px;font-weight:700;margin:6px 0">${studentName}</div>
@@ -373,8 +366,8 @@ function generateReportHTML(data) {
 document.addEventListener("DOMContentLoaded", function() {
   renderMathInElement(document.body, {
     delimiters: [
-      {left:"\\(", right:"\\)", display:false},
-      {left:"\\[", right:"\\]", display:true}
+      {left:"\\\\(", right:"\\\\)", display:false},
+      {left:"\\\\[", right:"\\\\]", display:true}
     ],
     throwOnError: false
   });
@@ -383,7 +376,7 @@ document.addEventListener("DOMContentLoaded", function() {
 </body></html>`;
 }
 
-// GET /api/export/:id/pdf — xuất PDF đẹp qua LaTeX service
+// ─── PDF export qua Railway XeLaTeX service ──────────────────────────────────
 router.get('/:id/pdf', async (req, res) => {
   const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Không tìm thấy' });
@@ -395,7 +388,6 @@ router.get('/:id/pdf', async (req, res) => {
     const LATEX_URL = process.env.LATEX_SERVICE_URL || 'https://overlef-my-production.up.railway.app/compile';
     const fetch = (await import('node-fetch')).default;
 
-    // Gửi dạng multipart/form-data như browser form submit
     const FormData = (await import('form-data')).default;
     const form = new FormData();
     form.append('content', latex);
@@ -410,6 +402,13 @@ router.get('/:id/pdf', async (req, res) => {
 
     if (!r.ok) {
       const errText = await r.text();
+      // Log latex source khi lỗi để debug
+      console.error('═══ LATEX COMPILE ERROR ═══');
+      console.error('Student:', data.studentName);
+      console.error('Error:', errText.slice(0, 500));
+      console.error('LaTeX source (500 ký tự đầu):');
+      console.error(latex.slice(0, 500));
+      console.error('═══════════════════════════');
       return res.status(500).json({ error: 'LaTeX compile error', detail: errText.slice(0, 500) });
     }
 
@@ -423,49 +422,24 @@ router.get('/:id/pdf', async (req, res) => {
   }
 });
 
-function escLat(s) {
-  if (!s) return '';
-  return String(s)
-    .replace(/\\/g, '\\textbackslash{}')
-    .replace(/&/g, '\\&')
-    .replace(/%/g, '\\%')
-    .replace(/#/g, '\\#')
-    .replace(/~/g, '\\textasciitilde{}')
-    .replace(/</g, '\\textless{}')
-    .replace(/>/g, '\\textgreater{}');
-}
-
-function unicodeToLatex(s) {
-  if (!s) return '';
-  const parts = [];
-  const re = /\$([^$\n]+?)\$/g;
-  let last = 0, m;
-  while ((m = re.exec(s)) !== null) {
-    if (m.index > last) parts.push(escLat(s.slice(last, m.index)));
-    parts.push('$' + m[1] + '$');
-    last = m.index + m[0].length;
-  }
-  if (last < s.length) parts.push(escLat(s.slice(last)));
-  return parts.join('');
-}
-
 function scoreColor(pct) {
   if (pct >= 80) return 'colorGioi';
   if (pct >= 60) return 'colorKha';
   return 'colorYeu';
 }
 
+// ─── Sinh LaTeX source với hàm textToLatex MỚI (an toàn) ─────────────────────
 function generateLatex(data) {
   const { studentName, subject, gradingResult, createdAt } = data;
   const { tong_diem, diem_toi_da, phan_tram, xep_loai, nhan_xet_chung, cac_cau } = gradingResult;
   const date = new Date(createdAt).toLocaleDateString('vi-VN');
-  const sc = scoreColor(phan_tram);
 
   const cauBlocks = (cac_cau || []).map(cau => {
     const pct2 = (cau.diem_dat / cau.diem_toi_da) * 100;
     const cc = scoreColor(pct2);
     const trangThai = cau.trang_thai === 'Đúng' ? '{\\color{colorGioi}\\textbf{✓ Đúng}}' :
-                      cau.trang_thai === 'Một phần' ? '{\\color{colorKha}\\textbf{◑ Một phần}}' :
+                      cau.trang_thai === 'Một phần' || cau.trang_thai === 'Đúng một phần' ? '{\\color{colorKha}\\textbf{◑ Một phần}}' :
+                      cau.trang_thai === 'Bỏ trống' ? '{\\color{colorYeu}\\textbf{○ Bỏ trống}}' :
                       '{\\color{colorYeu}\\textbf{✗ Sai}}';
 
     const dongRows = (cau.cham_tung_dong || []).map(d => {
@@ -473,15 +447,17 @@ function generateLatex(data) {
       const isSai  = d.ket_qua?.includes('✗');
       const kqColor = isDung ? '\\color{colorGioi}' : isSai ? '\\color{colorYeu}' : '\\color{colorKha}';
       const rowBg = isDung ? '\\rowcolor{bgDung}' : isSai ? '\\rowcolor{bgSai}' : '\\rowcolor{bgChap}';
-      const ghiChu = d.ghi_chu ? `\\footnotesize{${unicodeToLatex(d.ghi_chu)}}` : '';
-      return `${rowBg} ${unicodeToLatex(d.dong || '')} & {${kqColor}\\textbf{${escLat(d.ket_qua || '')}}} & ${ghiChu} \\\\`;
+      const ghiChu = d.ghi_chu ? `\\footnotesize{${textToLatex(d.ghi_chu)}}` : '';
+      // Cảnh báo nếu dòng bị AI sửa và đã khôi phục
+      const canhBaoLine = d.canh_bao ? ` {\\tiny\\color{colorKha}(${textToLatexPlain(d.canh_bao)})}` : '';
+      return `${rowBg} ${textToLatex(d.dong || '')}${canhBaoLine} & {${kqColor}\\textbf{${textToLatexPlain(d.ket_qua || '')}}} & ${ghiChu} \\\\`;
     }).join('\n');
 
-    const loiSai = cau.loi_sai ? `\\vspace{2pt}\\noindent{\\color{colorYeu}\\small ✗ \\textbf{Lỗi:} ${unicodeToLatex(cau.loi_sai)}}` : '';
-    const goiY   = cau.goi_y_sua ? `\\vspace{2pt}\\noindent{\\color{colorBlue}\\small 💡 ${unicodeToLatex(cau.goi_y_sua)}}` : '';
+    const loiSai = cau.loi_sai ? `\\vspace{2pt}\\noindent{\\color{colorYeu}\\small ✗ \\textbf{Lỗi:} ${textToLatex(cau.loi_sai)}}` : '';
+    const goiY   = cau.goi_y_sua ? `\\vspace{2pt}\\noindent{\\color{colorBlue}\\small 💡 ${textToLatex(cau.goi_y_sua)}}` : '';
 
     return `
-\\subsection*{\\color{${cc}}${escLat(cau.so_cau)} \\hfill ${cau.diem_dat}/${cau.diem_toi_da}đ \\quad ${trangThai}}
+\\subsection*{\\color{${cc}}${textToLatexPlain(cau.so_cau)} \\hfill ${cau.diem_dat}/${cau.diem_toi_da}đ \\quad ${trangThai}}
 \\vspace{-4pt}
 \\begin{longtable}{p{0.42\\textwidth} p{0.13\\textwidth} p{0.38\\textwidth}}
 \\hline
@@ -494,6 +470,13 @@ ${loiSai}
 ${goiY}
 \\vspace{4pt}`;
   }).join('\n');
+
+  // Banner cảnh báo integrity (nếu có AI sửa bài)
+  const integrityWarning = gradingResult.kiem_tra_toan_ven?.co_vi_pham
+    ? `\\vspace{6pt}
+\\noindent\\colorbox{bgWarn}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small \\textbf{⚠️ Lưu ý:} ${textToLatexPlain(gradingResult.kiem_tra_toan_ven.canh_bao_chung)}}}
+\\vspace{6pt}`
+    : '';
 
   return `\\documentclass[12pt,a4paper]{article}
 \\usepackage{fontspec}
@@ -522,12 +505,13 @@ ${goiY}
 \\definecolor{bgDung}{HTML}{f0fff4}
 \\definecolor{bgSai}{HTML}{fff5f5}
 \\definecolor{bgChap}{HTML}{fffdf0}
+\\definecolor{bgWarn}{HTML}{fff3cd}
 \\definecolor{accentBar}{HTML}{${phan_tram >= 80 ? '1b7a3e' : phan_tram >= 60 ? 'c47f17' : 'c0392b'}}
 
 \\pagestyle{fancy}
 \\fancyhf{}
-\\rhead{\\small ${escLat(subject)} · ${escLat(date)}}
-\\lhead{\\small \\textbf{${escLat(studentName)}}}
+\\rhead{\\small ${textToLatexPlain(subject)} · ${textToLatexPlain(date)}}
+\\lhead{\\small \\textbf{${textToLatexPlain(studentName)}}}
 \\rfoot{\\small Trang \\thepage}
 
 \\begin{document}
@@ -536,18 +520,20 @@ ${goiY}
 \\begin{center}
   \\rule{\\textwidth}{2pt}\\\\[6pt]
   {\\Large\\textbf{KẾT QUẢ CHẤM BÀI}}\\\\[4pt]
-  {\\large ${escLat(subject)}}\\\\[2pt]
-  {\\small ${escLat(date)}}\\\\[8pt]
+  {\\large ${textToLatexPlain(subject)}}\\\\[2pt]
+  {\\small ${textToLatexPlain(date)}}\\\\[8pt]
   \\rule{\\textwidth}{0.5pt}\\\\[8pt]
-  {\\LARGE\\textbf{${escLat(studentName)}}}\\\\[12pt]
+  {\\LARGE\\textbf{${textToLatexPlain(studentName)}}}\\\\[12pt]
   {\\fontsize{56}{60}\\selectfont\\color{accentBar}\\textbf{${tong_diem}}}%
   {\\Large\\color{gray}/${diem_toi_da}}\\\\[4pt]
-  {\\large\\color{accentBar}\\textbf{${phan_tram}\\% · ${escLat(xep_loai)}}}\\\\[10pt]
+  {\\large\\color{accentBar}\\textbf{${phan_tram}\\% · ${textToLatexPlain(xep_loai)}}}\\\\[10pt]
   \\rule{\\textwidth}{0.5pt}
 \\end{center}
 
+${integrityWarning}
+
 \\vspace{8pt}
-\\noindent\\colorbox{bgHeader}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small ${unicodeToLatex(nhan_xet_chung)}}}
+\\noindent\\colorbox{bgHeader}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small ${textToLatex(nhan_xet_chung || '')}}}
 \\vspace{12pt}
 
 % ── CHI TIẾT ──────────────────────────────────────────────────────────────────
@@ -557,6 +543,5 @@ ${cauBlocks}
 
 \\end{document}`;
 }
-
 
 module.exports = router;
