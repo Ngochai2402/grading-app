@@ -59,9 +59,12 @@ CHÚ Ý ĐẶC BIỆT VỀ KÝ HIỆU TOÁN (dễ nhầm nhất):
 - Dấu nhân: 3.2 nghĩa là 3×2=6, không phải số thập phân 3.2
 - Công thức Vi-et: x₁+x₂ = -b/a, x₁x₂ = c/a
 
-NGUYÊN TẮC:
+NGUYÊN TẮC TUYỆT ĐỐI:
 
 - Gõ lại CHÍNH XÁC từng ký tự — KHÔNG sửa, KHÔNG thêm, KHÔNG nhận xét
+- Học sinh viết số nào thì ghi số đó — DÙ SAI VẪN GHI NGUYÊN, ví dụ Δ = 20 thì ghi 20, KHÔNG tự sửa thành 92
+- Học sinh viết mẫu số nào thì ghi mẫu số đó — ví dụ 22 thì ghi 22, KHÔNG tự sửa thành 4
+- KHÔNG tự tính lại, KHÔNG kiểm tra đúng sai, KHÔNG hiệu chỉnh bất kỳ con số nào
 - Giữ nguyên xuống dòng như trong ảnh
 - Chữ mờ không đọc được: ghi [?]
 - Hình vẽ/đồ thị: mô tả ngắn trong [], ví dụ [Đồ thị parabol qua O, (-2;8), (2;8)]
