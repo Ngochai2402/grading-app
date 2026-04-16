@@ -395,14 +395,16 @@ router.get('/:id/pdf', async (req, res) => {
     const LATEX_URL = process.env.LATEX_SERVICE_URL || 'https://overlef-my-production.up.railway.app/compile';
     const fetch = (await import('node-fetch')).default;
 
-    const form = new URLSearchParams();
+    // Gửi dạng multipart/form-data như browser form submit
+    const FormData = (await import('form-data')).default;
+    const form = new FormData();
     form.append('content', latex);
     form.append('engine', 'xelatex');
 
     const r = await fetch(LATEX_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form.toString(),
+      headers: form.getHeaders(),
+      body: form,
       timeout: 60000
     });
 
