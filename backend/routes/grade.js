@@ -171,6 +171,16 @@ Trả về JSON:
   // Fix backslash: AI đôi khi gửi \frac thay vì \\frac trong JSON string
   jsonStr = jsonStr.replace(/(?<!\\)\\(?=[a-zA-Z])/g, '\\\\');
   const parsed = JSON.parse(jsonStr);
+
+  // Override diem_toi_da và phan_tram từ rubric (tránh AI tự tính sai khi HS bỏ nhiều câu)
+  const diemToiDa = rubric.tong_diem || parsed.diem_toi_da;
+  parsed.diem_toi_da = diemToiDa;
+  parsed.phan_tram = diemToiDa > 0
+    ? Math.round((parsed.tong_diem / diemToiDa) * 1000) / 10
+    : 0;
+  const pct = parsed.phan_tram;
+  parsed.xep_loai = pct >= 80 ? 'Giỏi' : pct >= 65 ? 'Khá' : pct >= 50 ? 'Trung bình' : 'Yếu';
+
   return parsed;
 }
 
