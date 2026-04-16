@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 const API = "https://grading-app-production-2949.up.railway.app";
 
-// ── Load KaTeX once ──────────────────────────────────────────────────────────
+// ── Load KaTeX một lần, inject vào <head> ──────────────────────────────────
 let _katexState = "idle";
 const _katexCbs = [];
 
@@ -27,46 +27,49 @@ function ensureKatex(cb) {
   document.head.appendChild(js);
 }
 
-// ── Render text có chứa $...$ bằng KaTeX ────────────────────────────────────
-// Tách text thành [text, $math$, text, $math$, ...]
-function parseMathSegments(text) {
-  if (!text) return [];
-  const segments = [];
-  const re = /\$([^$]+)\$/g;
+// ── Render string có $...$ thành HTML ───────────────────────────────────────
+function renderMathString(text) {
+  if (!text || !window.katex) return escapeHtml(text || "");
+  const parts = [];
+  const re = /\$([^$
+]+?)\$/g;
   let last = 0, m;
   while ((m = re.exec(text)) !== null) {
-    if (m.index > last) segments.push({ type: "text", value: text.slice(last, m.index) });
-    segments.push({ type: "math", value: m[1] });
+    if (m.index > last) parts.push(escapeHtml(text.slice(last, m.index)));
+    try {
+      parts.push(window.katex.renderToString(m[1], { throwOnError: false, strict: false }));
+    } catch {
+      parts.push(escapeHtml(`$${m[1]}$`));
+    }
     last = m.index + m[0].length;
   }
-  if (last < text.length) segments.push({ type: "text", value: text.slice(last) });
-  return segments;
+  if (last < text.length) parts.push(escapeHtml(text.slice(last)));
+  return parts.join("");
 }
 
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// ── Component tự động re-render khi KaTeX load xong ─────────────────────────
 function MathText({ text, style }) {
-  const [html, setHtml] = useState(null);
+  const [html, setHtml] = useState(() => escapeHtml(text || ""));
+  const [ready, setReady] = useState(_katexState === "ready");
 
   useEffect(() => {
-    if (!text) { setHtml(""); return; }
-    ensureKatex(() => {
-      const segments = parseMathSegments(text);
-      const rendered = segments.map(seg => {
-        if (seg.type === "math") {
-          try {
-            return window.katex.renderToString(seg.value, { throwOnError: false, strict: false });
-          } catch {
-            return `$${seg.value}$`;
-          }
-        }
-        // Escape HTML cho text thường
-        return seg.value
-          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      });
-      setHtml(rendered.join(""));
-    });
-  }, [text]);
+    if (_katexState === "ready") {
+      setReady(true);
+    } else {
+      ensureKatex(() => setReady(true));
+    }
+  }, []);
 
-  if (html === null) return <span style={style}>{text}</span>;
+  useEffect(() => {
+    if (ready && text !== undefined) {
+      setHtml(renderMathString(text || ""));
+    }
+  }, [ready, text]);
+
   return <span style={style} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
