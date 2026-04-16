@@ -251,7 +251,7 @@ ${JSON.stringify(rubric, null, 2)}
 - Công thức, số, biến số: viết trong dấu $…$
 - ❌ SAI: $Thay y = 2x vào y = -2x^2, ta được$
 - ✅ ĐÚNG: Thay $y = 2x$ vào $y = -2x^2$, ta được: $2x = -2x^2$
-- ✅ ĐÚNG: $x_1 + x_2 = \frac{7}{2}$, $\Delta = 17$, $\sqrt{36}$
+- ✅ ĐÚNG: $x_1 + x_2 = \\frac{7}{2}$, $\\Delta = 17$, $\\sqrt{36}$
 1. “ket_qua”: chỉ ghi “✓ Đúng” hoặc “✗ Sai”
 1. “ghi_chu”: để “”
 1. “ghi_chu_noi_bo”: ngắn gọn tối đa 1 câu, dùng để cảnh báo nội bộ nếu cần
@@ -301,8 +301,22 @@ jsonStr = jsonStr.replace(/(?<!\)\(?=[a-zA-Z])/g, ‘\\’);
 jsonStr = repairJson(jsonStr);
 const parsed = JSON.parse(jsonStr);
 
-// ── Lớp 3: Tính lại điểm từ rubric ──
-return recomputeScoresFromRubric(parsed, rubric);
+// Override diem_toi_da/phan_tram/xep_loai từ rubric (không để AI tự tính sai)
+// recomputeScoresFromRubric tạm tắt — cần log AI response trước khi bật lại
+const diemToiDa = Number(rubric.tong_diem) || parsed.diem_toi_da;
+parsed.diem_toi_da = diemToiDa;
+parsed.phan_tram = diemToiDa > 0
+? Math.round((parsed.tong_diem / diemToiDa) * 1000) / 10
+: 0;
+const pct = parsed.phan_tram;
+parsed.xep_loai = pct >= 80 ? ‘Giỏi’ : pct >= 65 ? ‘Khá’ : pct >= 50 ? ‘Trung bình’ : ‘Yếu’;
+
+// Log để debug diem_tieu_chi AI trả về
+console.log(’[DEBUG diem_tieu_chi]’, JSON.stringify(
+(parsed.cac_cau || []).map(c => ({ so_cau: c.so_cau, diem_dat: c.diem_dat, tieu_chi: c.diem_tieu_chi }))
+, null, 2));
+
+return parsed;
 }
 
 // ── POST /api/grade ── Main endpoint: Gemini transcribe → Claude grade
