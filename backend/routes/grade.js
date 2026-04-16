@@ -46,27 +46,24 @@ mimeType: file.mimetype
 }
 }));
 
-const prompt = `Bạn là chuyên gia OCR bài thi môn ${subject} bằng tiếng Việt, đặc biệt giỏi đọc ký hiệu toán học viết tay.
-Nhiệm vụ DUY NHẤT: GÕ LẠI chính xác toàn bộ nội dung bài làm học sinh trong ảnh.
+const prompt = `Bạn là công cụ OCR bài thi môn ${subject}. BẠN LÀ MỘT CHIẾC MÁY QUÉT (SCANNER), KHÔNG PHẢI GIÁO VIÊN TOÁN.
+Nhiệm vụ DUY NHẤT: Bóc tách văn bản (Text Extraction) — chép lại ĐÚNG Y HỆT những gì nhìn thấy trong ảnh.
 
-CHÚ Ý ĐẶC BIỆT VỀ KÝ HIỆU TOÁN (dễ nhầm nhất):
+CHÚ Ý ĐẶC BIỆT VỀ KÝ HIỆU TOÁN:
 
-- Phân số: phân biệt rõ tử số và mẫu số. Ví dụ: 7/2 là bảy phần hai, KHÔNG phải (-7)
-- Số âm vs phân số: “-7” khác hoàn toàn với “7/2”. Đọc kỹ có gạch ngang ngang (âm) hay gạch ngang dọc (phân số)
+- Phân số: phân biệt rõ tử số và mẫu số.
+- Số âm vs phân số: “-7” khác hoàn toàn với “7/2”.
 - Chỉ số dưới: x₁, x₂ — chữ số nhỏ phía dưới bên phải
-- Chỉ số trên (lũy thừa): x², (7/2)² — chữ số nhỏ phía trên bên phải
-- Ngoặc: phân biệt (7/2)² với (-7)² — trong ngoặc là gì phải đọc thật kỹ
-- Dấu nhân: 3.2 nghĩa là 3×2=6, không phải số thập phân 3.2
-- Công thức Vi-et: x₁+x₂ = -b/a, x₁x₂ = c/a
+- Chỉ số trên (lũy thừa): x², (7/2)²
 
-NGUYÊN TẮC TUYỆT ĐỐI:
+NGUYÊN TẮC TUYỆT ĐỐI — VI PHẠM LÀ SAI HOÀN TOÀN:
 
-- Gõ lại CHÍNH XÁC từng ký tự — KHÔNG sửa, KHÔNG thêm, KHÔNG nhận xét
-- Học sinh viết số nào thì ghi số đó — DÙ SAI VẪN GHI NGUYÊN, ví dụ Δ = 20 thì ghi 20, KHÔNG tự sửa thành 92
-- Học sinh viết mẫu số nào thì ghi mẫu số đó — ví dụ 22 thì ghi 22, KHÔNG tự sửa thành 4
-- KHÔNG tự tính lại, KHÔNG kiểm tra đúng sai, KHÔNG hiệu chỉnh bất kỳ con số nào
-- Giữ nguyên xuống dòng như trong ảnh
-- Chữ mờ không đọc được: ghi [?]
+- CHỈ CHÉP LẠI NHỮNG GÌ MẮT THẤY TRONG ẢNH. TUYỆT ĐỐI KHÔNG dùng logic toán học để tính lại.
+- DÙ HỌC SINH VIẾT SAI LOGIC HAY SAI KẾT QUẢ, vẫn phải ghi y hệt cái sai đó.
+  Ví dụ: học sinh viết “Δ = 20” → chỉ được ghi “Δ = 20”, TUYỆT ĐỐI KHÔNG sửa thành “Δ = 92”.
+  Ví dụ: học sinh viết “2 + 2 = 5” → chỉ được ghi “2 + 2 = 5”, KHÔNG sửa thành “2 + 2 = 4”.
+- TUYỆT ĐỐI KHÔNG chèn thêm “(sai)”, “(đúng)”, “(học sinh ghi…)” hay bất kỳ nhận xét nào.
+- Giữ nguyên xuống dòng như trong ảnh. Chữ mờ không đọc được: ghi [?].
 - Hình vẽ/đồ thị: mô tả ngắn trong [], ví dụ [Đồ thị parabol qua O, (-2;8), (2;8)]
 - Nhiều ảnh: phân biệt [Trang 1], [Trang 2]…
 
@@ -209,6 +206,30 @@ parsed.xep_loai = pct >= 80 ? ‘Giỏi’ : pct >= 65 ? ‘Khá’ : pct >= 50 
 return parsed;
 }
 
+// ── Xóa chú thích AI tự thêm vào “dong” ─────────────────────────────────────
+// Học sinh viết gì thì “dong” phải là đúng cái đó — không được thêm gì
+function cleanDong(dong) {
+if (!dong) return dong;
+// Xóa mọi thứ trong ngoặc ở cuối có chứa từ khóa nghi ngờ
+return dong
+.replace(/\s*([^)]*(?:sai|đúng|học sinh|ghi|không đúng|lỗi|nhầm|=)[^)]*)$/gi, ‘’)
+.replace(/\s*[[^]]*(?:sai|đúng|học sinh|ghi|không đúng|lỗi|nhầm|=)[^]]*]$/gi, ‘’)
+.trim();
+}
+
+function cleanGradingResult(parsed) {
+if (!parsed?.cac_cau) return parsed;
+parsed.cac_cau = parsed.cac_cau.map(cau => {
+if (!cau.cham_tung_dong) return cau;
+cau.cham_tung_dong = cau.cham_tung_dong.map(d => ({
+…d,
+dong: cleanDong(d.dong)
+}));
+return cau;
+});
+return parsed;
+}
+
 // ── GIAI ĐOẠN 2: Claude chấm từng dòng ──────────────────────────────────────
 async function gradeWithClaude(transcribed, rubric, studentName, subject) {
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -226,16 +247,23 @@ ${baiLamText}
 ${JSON.stringify(rubric, null, 2)}
 
 === NGUYÊN TẮC CHẤM BẮT BUỘC ===
+QUAN TRỌNG NHẤT VỀ TRƯỜNG “dong”:
 
-1. “dong” = chép NGUYÊN XI từng dòng học sinh viết — TUYỆT ĐỐI không thêm, không sửa, không bình luận.
-1. “ket_qua” = chỉ “✓ Đúng” hoặc “✗ Sai” — không giải thích thêm.
-1. “ghi_chu” = chỉ ra SAI Ở ĐÂU trong dòng đó (nếu sai), tối đa 1 câu ngắn. Không viết cách sửa. Nếu đúng thì để “”.
-1. Chỉ cho điểm những gì học sinh THỰC SỰ viết — không suy diễn bước học sinh không làm.
+- Trường “dong” bắt buộc phải là bản COPY-PASTE ĐÚNG 100% từ mảng “noi_dung_goc” của bài làm phía trên.
+- TUYỆT ĐỐI KHÔNG tự sửa lại công thức hay số liệu của học sinh thành đúng rồi nhét vào “dong”.
+- TUYỆT ĐỐI KHÔNG thêm bất kỳ bình luận nào vào “dong” — không “(sai)”, không “(đúng)”, không “(học sinh ghi…)”, không bất kỳ ký tự nào thêm vào.
+- Mọi nhận xét đúng/sai CHỈ ĐƯỢC ghi vào “ghi_chu” và “loi_sai”.
+
+Các nguyên tắc khác:
+
+1. “ket_qua” = chỉ “✓ Đúng” hoặc “✗ Sai”.
+1. “ghi_chu” = nếu sai: chỉ ra sai ở đâu, tối đa 1 câu. Nếu đúng: để “”.
+1. Chỉ cho điểm những gì học sinh THỰC SỰ viết — không suy diễn.
 1. Tiêu chí chưa rõ ràng → KHÔNG cho điểm.
-1. Cách làm khác đáp án vẫn được nếu đúng toán VÀ đáp ứng tiêu chí rubric.
+1. Cách làm khác vẫn được nếu đúng toán VÀ đáp ứng tiêu chí rubric.
 1. Nếu học sinh bỏ trống: điểm = 0, cham_tung_dong = [].
-1. “loi_sai”: 1 câu mô tả lỗi chính học sinh mắc. Để “” nếu đúng hết.
-1. “goi_y_sua”: để “” — không cần.
+1. “loi_sai”: 1 câu mô tả lỗi chính. Để “” nếu đúng hết.
+1. “goi_y_sua”: để “”.
 1. “tong_diem” = tổng diem_dat các câu.
 
 === QUY TẮC CÔNG THỨC ===
@@ -287,6 +315,9 @@ jsonStr = jsonStr.replace(/(?<!\)\(?=[a-zA-Z])/g, ‘\\’);
 // Fix JSON bị cắt giữa chừng
 jsonStr = repairJson(jsonStr);
 const parsed = JSON.parse(jsonStr);
+
+// Xóa chú thích AI tự thêm vào dong
+cleanGradingResult(parsed);
 
 // Override diem_toi_da/phan_tram/xep_loai từ rubric (không để AI tự tính sai)
 // recomputeScoresFromRubric tạm tắt — cần log AI response trước khi bật lại
