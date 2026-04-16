@@ -2,10 +2,11 @@ import { useState } from "react";
 import UploadPage from "./pages/UploadPage";
 import ResultPage from "./pages/ResultPage";
 import HistoryPage from "./pages/HistoryPage";
+import BatchPage from "./pages/BatchPage";
 import "./App.css";
 
 export default function App() {
-  const [page, setPage] = useState("upload"); // upload | result | history
+  const [page, setPage] = useState("upload"); // upload | result | history | batch
   const [result, setResult] = useState(null);
 
   return (
@@ -20,7 +21,13 @@ export default function App() {
             className={page === "upload" ? "active" : ""}
             onClick={() => setPage("upload")}
           >
-            Chấm bài mới
+            Chấm 1 bài
+          </button>
+          <button
+            className={page === "batch" ? "active" : ""}
+            onClick={() => setPage("batch")}
+          >
+            Cả lớp
           </button>
           <button
             className={page === "history" ? "active" : ""}
@@ -54,6 +61,7 @@ export default function App() {
             }}
           />
         )}
+        {page === "batch" && <BatchPage />}
       </main>
     </div>
   );
