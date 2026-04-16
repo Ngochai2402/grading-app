@@ -1,762 +1,435 @@
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const Anthropic = require('@anthropic-ai/sdk');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { v4: uuidv4 } = require('uuid');
+const express = require(‘express’);
+const multer = require(‘multer’);
+const path = require(‘path’);
+const fs = require(‘fs’);
+const Anthropic = require(’@anthropic-ai/sdk’);
+const { GoogleGenerativeAI } = require(’@google/generative-ai’);
+const { v4: uuidv4 } = require(‘uuid’);
 
 const router = express.Router();
 
-/* ============================================================================
- * Upload config
- * ========================================================================== */
-const uploadsDir = path.join(__dirname, '../uploads');
-const resultsDir = path.join(__dirname, '../results');
-const sessionsDir = path.join(__dirname, '../results/sessions');
-
-[uploadsDir, resultsDir, sessionsDir].forEach(dir => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
-
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
-    cb(null, `${uuidv4()}${ext}`);
-  }
+destination: (req, file, cb) => cb(null, path.join(__dirname, ‘../uploads’)),
+filename: (req, file, cb) => {
+const ext = path.extname(file.originalname);
+cb(null, `${uuidv4()}${ext}`);
+}
 });
 
 const upload = multer({
-  storage,
-  limits: { fileSize: 20 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
-    if (allowed.includes(file.mimetype)) return cb(null, true);
-    return cb(new Error('Chỉ chấp nhận ảnh JPG, PNG, WebP'));
-  }
+storage,
+limits: { fileSize: 20 * 1024 * 1024 },
+fileFilter: (req, file, cb) => {
+const allowed = [‘image/jpeg’, ‘image/png’, ‘image/webp’];
+if (allowed.includes(file.mimetype)) cb(null, true);
+else cb(new Error(‘Chỉ chấp nhận ảnh JPG, PNG, WebP’));
+}
 });
 
 function uploadMiddleware(req, res, next) {
-  upload.array('images[]', 20)(req, res, err => {
-    if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
-      return upload.array('images', 20)(req, res, next);
-    }
-    return next(err);
-  });
+upload.array(‘images[]’, 20)(req, res, err => {
+if (err && err.code === ‘LIMIT_UNEXPECTED_FILE’) upload.array(‘images’, 20)(req, res, next);
+else next(err);
+});
 }
 
-/* ============================================================================
- * Helpers
- * ========================================================================== */
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function safeReadFileBase64(filePath) {
-  return fs.readFileSync(filePath).toString('base64');
-}
-
-function extractJsonBlock(text) {
-  if (!text || typeof text !== 'string') return '';
-
-  const fenced = text.match(/```json\s*([\s\S]*?)\s*```/i);
-  if (fenced) return fenced[1].trim();
-
-  const genericFenced = text.match(/```[\s\S]*?\n([\s\S]*?)```/);
-  if (genericFenced) return genericFenced[1].trim();
-
-  const firstBrace = text.indexOf('{');
-  const lastBrace = text.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return text.slice(firstBrace, lastBrace + 1).trim();
-  }
-
-  return text.trim();
-}
-
-function repairJson(str) {
-  let s = String(str || '').trim();
-  if (!s) return s;
-
-  s = s.replace(/^\uFEFF/, '');
-  s = s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
-  s = s.replace(/\t/g, '  ');
-
-  let result = '';
-  let inStr = false;
-  let esc = false;
-  const stack = [];
-
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-
-    if (esc) {
-      result += c;
-      esc = false;
-      continue;
-    }
-
-    if (c === '\\' && inStr) {
-      result += c;
-      esc = true;
-      continue;
-    }
-
-    if (c === '"') {
-      result += c;
-      inStr = !inStr;
-      continue;
-    }
-
-    if (!inStr) {
-      if (c === '{') stack.push('}');
-      else if (c === '[') stack.push(']');
-      else if ((c === '}' || c === ']') && stack.length && stack[stack.length - 1] === c) {
-        stack.pop();
-      }
-    }
-
-    result += c;
-  }
-
-  result = result.replace(/,\s*([}\]])/g, '$1').trim();
-
-  if (stack.length > 0) {
-    result += stack.reverse().join('');
-  }
-
-  return result;
-}
-
-function parseJsonSafe(rawText, fallback = null) {
-  const extracted = extractJsonBlock(rawText);
-  const repaired = repairJson(extracted);
-
-  try {
-    return JSON.parse(repaired);
-  } catch (err1) {
-    try {
-      const fixed = repaired
-        .replace(/,\s*}/g, '}')
-        .replace(/,\s*]/g, ']');
-      return JSON.parse(fixed);
-    } catch (err2) {
-      if (fallback !== null) return fallback;
-      throw new Error(`Không parse được JSON từ AI. Lỗi: ${err2.message}`);
-    }
-  }
-}
-
-function normalizeArray(val) {
-  return Array.isArray(val) ? val : [];
-}
-
-function round2(n) {
-  return Math.round((Number(n) || 0) * 100) / 100;
-}
-
-function round1(n) {
-  return Math.round((Number(n) || 0) * 10) / 10;
-}
-
-function buildRubricMap(rubric) {
-  const map = new Map();
-  const cauList = normalizeArray(rubric?.cac_cau);
-
-  for (const cau of cauList) {
-    map.set(String(cau.so_cau || '').trim(), {
-      so_cau: String(cau.so_cau || '').trim(),
-      noi_dung: cau.noi_dung || '',
-      diem: Number(cau.diem || 0),
-      dap_an: cau.dap_an || '',
-      tieu_chi: normalizeArray(cau.tieu_chi).map(tc => ({
-        mo_ta: tc.mo_ta || '',
-        diem: Number(tc.diem || 0)
-      }))
-    });
-  }
-
-  return map;
-}
-
-function makeEmptyQuestionScore(rubricQuestion) {
-  const tieuChi = normalizeArray(rubricQuestion?.tieu_chi).map(tc => ({
-    tieu_chi: tc.mo_ta || '',
-    dat: false,
-    diem: 0
-  }));
-
-  return {
-    so_cau: rubricQuestion?.so_cau || '',
-    diem_dat: 0,
-    diem_toi_da: Number(rubricQuestion?.diem || 0),
-    trang_thai: 'Sai',
-    cham_tung_dong: [],
-    diem_tieu_chi: tieuChi,
-    loi_sai: 'Không có bài làm hoặc không đạt tiêu chí.',
-    goi_y_sua: ''
-  };
-}
-
-function normalizeClaudeQuestion(aiQuestion, rubricQuestion) {
-  const q = aiQuestion || {};
-  const rq = rubricQuestion || {};
-  const rubricCriteria = normalizeArray(rq.tieu_chi);
-
-  let diemTieuChi = normalizeArray(q.diem_tieu_chi).map((item, idx) => {
-    const rubricTc = rubricCriteria[idx] || {};
-    const maxDiem = Number(rubricTc.diem || 0);
-
-    let dat = false;
-    if (typeof item?.dat === 'boolean') dat = item.dat;
-    else if (typeof item?.dat === 'string') {
-      const s = item.dat.trim().toLowerCase();
-      dat = ['true', '1', 'yes', 'đúng', 'dat', 'đạt'].includes(s);
-    }
-
-    let diem = Number(item?.diem || 0);
-    if (!Number.isFinite(diem) || diem < 0) diem = 0;
-    if (diem > maxDiem) diem = maxDiem;
-
-    if (dat && diem === 0 && maxDiem > 0) {
-      diem = maxDiem;
-    }
-
-    if (!dat) {
-      diem = 0;
-    }
-
-    return {
-      tieu_chi: item?.tieu_chi || rubricTc.mo_ta || `Tiêu chí ${idx + 1}`,
-      dat,
-      diem: round2(diem)
-    };
-  });
-
-  if (diemTieuChi.length < rubricCriteria.length) {
-    for (let i = diemTieuChi.length; i < rubricCriteria.length; i++) {
-      diemTieuChi.push({
-        tieu_chi: rubricCriteria[i].mo_ta || `Tiêu chí ${i + 1}`,
-        dat: false,
-        diem: 0
-      });
-    }
-  }
-
-  const diemDat = round2(diemTieuChi.reduce((sum, x) => sum + Number(x.diem || 0), 0));
-  const diemToiDa = Number(rq.diem || 0);
-
-  let trangThai = q.trang_thai || '';
-  if (!trangThai) {
-    trangThai = diemDat > 0 ? 'Đúng một phần' : 'Sai';
-  }
-
-  const chamTungDong = normalizeArray(q.cham_tung_dong).map(item => ({
-    dong: item?.dong || '',
-    ket_qua: item?.ket_qua === '✓ Đúng' ? '✓ Đúng' : '✗ Sai',
-    ghi_chu: item?.ghi_chu || ''
-  }));
-
-  return {
-    so_cau: q.so_cau || rq.so_cau || '',
-    diem_dat: diemDat > diemToiDa ? diemToiDa : diemDat,
-    diem_toi_da: diemToiDa,
-    trang_thai: trangThai,
-    cham_tung_dong: chamTungDong,
-    diem_tieu_chi: diemTieuChi,
-    loi_sai: q.loi_sai || '',
-    goi_y_sua: q.goi_y_sua || ''
-  };
-}
-
-function recalcFinalScore(parsed, rubric, transcribed) {
-  const rubricMap = buildRubricMap(rubric);
-  const aiQuestions = normalizeArray(parsed?.cac_cau);
-  const transcribedQuestions = normalizeArray(transcribed?.cac_cau);
-
-  const transcribedMap = new Map();
-  for (const q of transcribedQuestions) {
-    transcribedMap.set(String(q.so_cau || '').trim(), q);
-  }
-
-  const aiMap = new Map();
-  for (const q of aiQuestions) {
-    aiMap.set(String(q.so_cau || '').trim(), q);
-  }
-
-  const finalQuestions = [];
-
-  for (const [soCau, rubricQuestion] of rubricMap.entries()) {
-    const transcribedQuestion = transcribedMap.get(soCau);
-    const aiQuestion = aiMap.get(soCau);
-
-    const isBlank =
-      !transcribedQuestion ||
-      !Array.isArray(transcribedQuestion.noi_dung_goc) ||
-      transcribedQuestion.noi_dung_goc.length === 0 ||
-      transcribedQuestion.noi_dung_goc.every(line => !String(line || '').trim());
-
-    if (isBlank) {
-      finalQuestions.push(makeEmptyQuestionScore(rubricQuestion));
-      continue;
-    }
-
-    finalQuestions.push(normalizeClaudeQuestion(aiQuestion, rubricQuestion));
-  }
-
-  const tongDiem = round2(finalQuestions.reduce((sum, q) => sum + Number(q.diem_dat || 0), 0));
-  const diemToiDa = Number(rubric?.tong_diem || finalQuestions.reduce((sum, q) => sum + Number(q.diem_toi_da || 0), 0));
-  const phanTram = diemToiDa > 0 ? round1((tongDiem / diemToiDa) * 100) : 0;
-  const xepLoai = phanTram >= 80 ? 'Giỏi' : phanTram >= 65 ? 'Khá' : phanTram >= 50 ? 'Trung bình' : 'Yếu';
-
-  return {
-    tong_diem: tongDiem,
-    diem_toi_da: diemToiDa,
-    phan_tram: phanTram,
-    xep_loai: xepLoai,
-    nhan_xet_chung: parsed?.nhan_xet_chung || '',
-    cac_cau: finalQuestions
-  };
-}
-
-/* ============================================================================
- * Phase 1: Gemini OCR / transcription
- * ========================================================================== */
+// ── GIAI ĐOẠN 1: Gemini đọc & gõ lại chữ viết tay ──────────────────────────
 async function transcribeWithGemini(files, subject) {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: ‘gemini-2.5-flash’ });
 
-  const imageParts = files.map(file => ({
-    inlineData: {
-      data: safeReadFileBase64(file.path),
-      mimeType: file.mimetype
-    }
-  }));
+// Chuẩn bị ảnh cho Gemini
+const imageParts = files.map(file => ({
+inlineData: {
+data: fs.readFileSync(file.path).toString(‘base64’),
+mimeType: file.mimetype
+}
+}));
 
-  const prompt = `Bạn là chuyên gia OCR bài thi môn ${subject} bằng tiếng Việt, đặc biệt giỏi đọc ký hiệu toán học viết tay.
+const prompt = `Bạn là chuyên gia OCR bài thi môn ${subject} bằng tiếng Việt, đặc biệt giỏi đọc ký hiệu toán học viết tay.
+Nhiệm vụ DUY NHẤT: GÕ LẠI chính xác toàn bộ nội dung bài làm học sinh trong ảnh.
 
-NHIỆM VỤ DUY NHẤT:
-- Gõ lại trung thực toàn bộ bài làm học sinh từ ảnh
-- KHÔNG chấm điểm
-- KHÔNG sửa bài
-- KHÔNG nhận xét
-- KHÔNG suy luận thêm nếu không chắc
+CHÚ Ý ĐẶC BIỆT VỀ KÝ HIỆU TOÁN (dễ nhầm nhất):
 
-QUY TẮC CỰC KỲ QUAN TRỌNG:
-1. Giữ nguyên nội dung học sinh viết
-2. Giữ nguyên thứ tự dòng
-3. Nếu mờ/khó đọc: ghi "[?]"
-4. Nếu có hình vẽ/đồ thị: mô tả ngắn trong []
-5. Nếu có nhiều ảnh: ghi rõ [Trang 1], [Trang 2], ...
-6. Phân biệt thật kỹ:
-   - 7/2 khác -7
-   - x1, x2 khác x^2
-   - (7/2)^2 khác (-7)^2
-   - 3.2 trong bài làm toán phổ thông có thể là 3×2, không tự đổi thành số thập phân nếu không chắc
+- Phân số: phân biệt rõ tử số và mẫu số. Ví dụ: 7/2 là bảy phần hai, KHÔNG phải (-7)
+- Số âm vs phân số: “-7” khác hoàn toàn với “7/2”. Đọc kỹ có gạch ngang ngang (âm) hay gạch ngang dọc (phân số)
+- Chỉ số dưới: x₁, x₂ — chữ số nhỏ phía dưới bên phải
+- Chỉ số trên (lũy thừa): x², (7/2)² — chữ số nhỏ phía trên bên phải
+- Ngoặc: phân biệt (7/2)² với (-7)² — trong ngoặc là gì phải đọc thật kỹ
+- Dấu nhân: 3.2 nghĩa là 3×2=6, không phải số thập phân 3.2
+- Công thức Vi-et: x₁+x₂ = -b/a, x₁x₂ = c/a
 
-YÊU CẦU ĐẦU RA:
-- Trả về JSON hợp lệ
-- Không thêm giải thích ngoài JSON
+NGUYÊN TẮC:
 
-MẪU:
-\`\`\`json
+- Gõ lại CHÍNH XÁC từng ký tự — KHÔNG sửa, KHÔNG thêm, KHÔNG nhận xét
+- Giữ nguyên xuống dòng như trong ảnh
+- Chữ mờ không đọc được: ghi [?]
+- Hình vẽ/đồ thị: mô tả ngắn trong [], ví dụ [Đồ thị parabol qua O, (-2;8), (2;8)]
+- Nhiều ảnh: phân biệt [Trang 1], [Trang 2]…
+
+Trả về JSON (không thêm text nào khác):
+```json
 {
-  "cac_cau": [
-    {
-      "so_cau": "Câu 1a",
-      "noi_dung_goc": [
-        "dòng 1",
-        "dòng 2"
-      ]
-    }
-  ]
+“cac_cau”: [
+{
+“so_cau”: “Câu 1”,
+“noi_dung_goc”: [
+“dòng 1 học sinh viết”,
+“dòng 2 học sinh viết”
+]
 }
-\`\`\``;
+]
+}
+````;
 
-  let raw = '';
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const result = await model.generateContent([prompt, ...imageParts]);
-      raw = result.response.text();
-      break;
-    } catch (err) {
-      const msg = err?.message || '';
-      const overload =
-        msg.includes('503') ||
-        msg.toLowerCase().includes('overloaded') ||
-        msg.toLowerCase().includes('unavailable');
-
-      if (attempt === 3 || !overload) throw err;
-
-      console.log(`Gemini quá tải, thử lại lần ${attempt + 1}...`);
-      await sleep(3000 * attempt);
-    }
-  }
-
-  const parsed = parseJsonSafe(raw, { cac_cau: [] });
-
-  if (!Array.isArray(parsed.cac_cau)) {
-    parsed.cac_cau = [];
-  }
-
-  parsed.cac_cau = parsed.cac_cau.map(item => ({
-    so_cau: String(item?.so_cau || '').trim(),
-    noi_dung_goc: normalizeArray(item?.noi_dung_goc).map(x => String(x || ''))
-  }));
-
-  return parsed;
+// Retry tối đa 3 lần nếu 503
+let text = ‘’;
+for (let attempt = 1; attempt <= 3; attempt++) {
+try {
+const result = await model.generateContent([prompt, …imageParts]);
+text = result.response.text();
+break;
+} catch (err) {
+if (attempt === 3) throw err;
+const isOverload = err.message?.includes(‘503’) || err.message?.includes(‘overloaded’) || err.message?.includes(‘unavailable’);
+if (!isOverload) throw err;
+console.log(`Gemini 503, thử lại lần ${attempt + 1}...`);
+await new Promise(r => setTimeout(r, 3000 * attempt));
+}
+}
+const m = text.match(/`json\n?([\s\S]*?)\n?`/) || text.match(/({[\s\S]*})/);
+return JSON.parse(m ? m[1] : text);
 }
 
-/* ============================================================================
- * Phase 2: Claude grading
- * ========================================================================== */
+// ── Sửa JSON bị cắt giữa chừng ──────────────────────────────────────────────
+function repairJson(str) {
+// Cắt bỏ phần thừa sau object chính
+let s = str.trim();
+// Đếm số dấu mở/đóng để đóng nốt
+let opens = 0, inStr = false, esc = false;
+for (let i = 0; i < s.length; i++) {
+const c = s[i];
+if (esc) { esc = false; continue; }
+if (c === ‘\’ && inStr) { esc = true; continue; }
+if (c === ‘”’) { inStr = !inStr; continue; }
+if (inStr) continue;
+if (c === ‘{’ || c === ‘[’) opens++;
+if (c === ‘}’ || c === ‘]’) opens–;
+}
+// Nếu JSON bị cắt (opens > 0), thử đóng lại
+if (opens > 0) {
+// Tìm điểm cắt hợp lý: kết thúc object cuối cùng hoàn chỉnh trong cac_cau
+// Đơn giản: trim trailing comma rồi đóng
+s = s.replace(/,\s*$/, ‘’);
+// Đóng các cấu trúc còn hở
+const stack = [];
+inStr = false; esc = false;
+for (let i = 0; i < s.length; i++) {
+const c = s[i];
+if (esc) { esc = false; continue; }
+if (c === ‘\’ && inStr) { esc = true; continue; }
+if (c === ‘”’) { inStr = !inStr; continue; }
+if (inStr) continue;
+if (c === ‘{’) stack.push(’}’);
+else if (c === ‘[’) stack.push(’]’);
+else if ((c === ‘}’ || c === ‘]’) && stack.length) stack.pop();
+}
+s += stack.reverse().join(’’);
+}
+return s;
+}
+
+// ── Helper: normalize text để match số câu ───────────────────────────────────
+function normalizeText(s) {
+return String(s || ‘’).normalize(‘NFC’).replace(/\s+/g, ’ ’).trim().toLowerCase();
+}
+
+function rubricMapFromRubric(rubric) {
+const map = new Map();
+for (const cau of rubric.cac_cau || []) {
+map.set(normalizeText(cau.so_cau), cau);
+}
+return map;
+}
+
+// ── Lớp 2: Tính lại điểm từ rubric, không tin AI hoàn toàn ──────────────────
+function recomputeScoresFromRubric(parsed, rubric) {
+const rubricMap = rubricMapFromRubric(rubric);
+let tong = 0;
+
+parsed.cac_cau = (parsed.cac_cau || []).map(cau => {
+const rubricCau = rubricMap.get(normalizeText(cau.so_cau));
+if (!rubricCau) {
+return {
+…cau,
+diem_dat: 0,
+diem_toi_da: cau.diem_toi_da || 0,
+co_nghi_van_rubric: true,
+ghi_chu_noi_bo: cau.ghi_chu_noi_bo || ‘Không khớp số câu với rubric’
+};
+}
+
+```
+const rubricCriteria = rubricCau.tieu_chi || [];
+const aiCriteria = Array.isArray(cau.diem_tieu_chi) ? cau.diem_tieu_chi : [];
+
+const fixedCriteria = rubricCriteria.map((tc, idx) => {
+  const aiTc = aiCriteria[idx] || {};
+  const dat = aiTc.dat === true;
+  return {
+    tieu_chi: tc.mo_ta,
+    dat,
+    diem: dat ? Number(tc.diem || 0) : 0
+  };
+});
+
+const diemDat = fixedCriteria.reduce((sum, tc) => sum + Number(tc.diem || 0), 0);
+tong += diemDat;
+
+return {
+  ...cau,
+  diem_dat: Math.round(diemDat * 100) / 100,
+  diem_toi_da: Number(rubricCau.diem || 0),
+  diem_tieu_chi: fixedCriteria
+};
+```
+
+});
+
+parsed.tong_diem = Math.round(tong * 100) / 100;
+parsed.diem_toi_da = Number(rubric.tong_diem || 0);
+parsed.phan_tram = parsed.diem_toi_da > 0
+? Math.round((parsed.tong_diem / parsed.diem_toi_da) * 1000) / 10
+: 0;
+const pct = parsed.phan_tram;
+parsed.xep_loai = pct >= 80 ? ‘Giỏi’ : pct >= 65 ? ‘Khá’ : pct >= 50 ? ‘Trung bình’ : ‘Yếu’;
+return parsed;
+}
+
+// ── GIAI ĐOẠN 2: Claude chấm từng dòng ──────────────────────────────────────
 async function gradeWithClaude(transcribed, rubric, studentName, subject) {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  const baiLamText = normalizeArray(transcribed?.cac_cau)
-    .map(c => `${c.so_cau}:\n${normalizeArray(c.noi_dung_goc).join('\n')}`)
-    .join('\n\n');
+const baiLamText = transcribed.cac_cau
+.map(c => `${c.so_cau}:\n${c.noi_dung_goc.join('\n')}`)
+.join(’\n\n’);
 
-  const prompt = `Bạn là giáo viên ${subject} chuyên nghiệp. Hãy chấm bài học sinh ${studentName}.
+const prompt = `Bạn là giáo viên ${subject} chuyên nghiệp. Chấm bài học sinh ${studentName}.
 
-=== BÀI LÀM (đã OCR) ===
+=== BÀI LÀM (đã OCR chính xác) ===
 ${baiLamText}
 
-=== ĐÁP ÁN / RUBRIC CHÍNH THỨC ===
+=== RUBRIC CHÍNH THỨC ===
 ${JSON.stringify(rubric, null, 2)}
 
-=== NGUYÊN TẮC BẮT BUỘC ===
-1. PHẢI bám tuyệt đối vào rubric chính thức.
-2. KHÔNG được tranh luận với đáp án chính thức.
-3. KHÔNG được viết kiểu:
-   - "rubric có thể sai"
-   - "đề có thể chép nhầm"
-   - "nếu theo cách này thì đáp án khác"
-4. Nếu bài làm không khớp đáp án chính thức thì chấm theo rubric chính thức.
-5. Có thể cho điểm nếu học sinh làm cách khác nhưng VẪN đúng toán và VẪN thỏa tiêu chí rubric.
-6. Nếu bài bỏ trống thì 0 điểm.
-7. Mỗi tiêu chí chỉ được chấm trong khoảng từ 0 đến số điểm tối đa của tiêu chí đó.
-8. Không tự cộng điểm vượt quá điểm tối đa của câu.
-9. Nhận xét ngắn gọn, rõ lỗi chính, không lan man.
+=== NGUYÊN TẮC CHẤM BẮT BUỘC ===
 
-=== QUY TẮC TRÌNH BÀY "cham_tung_dong" ===
-- Tách chữ tiếng Việt và công thức toán
+1. CHỈ chấm theo RUBRIC CHÍNH THỨC.
+1. KHÔNG được tự sửa đề, tự sửa đáp án, tự nghi ngờ rubric.
+1. Nếu bài làm có dấu hiệu đúng về mặt toán nhưng KHÔNG khớp rubric/đáp án chính thức:
+- vẫn chấm theo rubric chính thức,
+- đồng thời ghi “co_nghi_van_rubric”: true ở câu đó,
+- và ghi ngắn gọn lý do vào “ghi_chu_noi_bo”.
+1. Chấm theo TỪNG TIÊU CHÍ của rubric:
+- đạt tiêu chí nào thì chỉ cho đúng số điểm của tiêu chí đó,
+- không tự cộng điểm vượt rubric.
+1. Nếu học sinh bỏ trống hoàn toàn câu nào:
+- điểm câu đó = 0,
+- mọi tiêu chí đều “dat”: false.
+1. Nếu học sinh làm nhầm câu khác:
+- chỉ chấm theo đúng số câu rubric tương ứng,
+- không chuyển điểm từ câu này sang câu khác.
+1. Cách làm khác đáp án vẫn được chấp nhận CHỈ KHI đúng toán VÀ thỏa yêu cầu tiêu chí rubric.
+1. KHÔNG tranh luận với đáp án chính thức.
+1. “tong_diem” phải bằng tổng điểm các câu.
+1. “diem_dat” của mỗi câu phải bằng tổng các mục “diem_tieu_chi” được chấm đạt.
+
+=== QUY TẮC TRÌNH BÀY ===
+
+1. Tách biệt chữ tiếng Việt và công thức toán:
 - Chữ tiếng Việt: viết ngoài dấu $
-- Công thức, biểu thức, số, biến: viết trong $...$
-- Ví dụ đúng:
-  "Thay $y = 2x$ vào $y = -2x^2$ được $2x = -2x^2$"
+- Công thức, số, biến số: viết trong dấu $…$
+- ❌ SAI: $Thay y = 2x vào y = -2x^2, ta được$
+- ✅ ĐÚNG: Thay $y = 2x$ vào $y = -2x^2$, ta được: $2x = -2x^2$
+- ✅ ĐÚNG: $x_1 + x_2 = \frac{7}{2}$, $\Delta = 17$, $\sqrt{36}$
+1. “ket_qua”: chỉ ghi “✓ Đúng” hoặc “✗ Sai”
+1. “ghi_chu”: để “”
+1. “ghi_chu_noi_bo”: ngắn gọn tối đa 1 câu, dùng để cảnh báo nội bộ nếu cần
+1. Không thêm bất kỳ lời giải thích nào ngoài JSON
 
-=== "ket_qua" ===
-- Chỉ ghi đúng một trong hai giá trị:
-  - "✓ Đúng"
-  - "✗ Sai"
-
-=== "ghi_chu" ===
-- Có thể để trống ""
-- Nếu cần ghi, chỉ ghi ngắn gọn, tuyệt đối không nghi ngờ lại rubric
-
-=== ĐẦU RA ===
-Trả về JSON hợp lệ, không thêm văn bản nào ngoài JSON:
-
-\`\`\`json
+=== JSON BẮT BUỘC ===
+```json
 {
-  "tong_diem": 0,
-  "diem_toi_da": 0,
-  "phan_tram": 0,
-  "xep_loai": "Yếu",
-  "nhan_xet_chung": "nhận xét ngắn gọn",
-  "cac_cau": [
-    {
-      "so_cau": "Câu 1a",
-      "diem_dat": 0,
-      "diem_toi_da": 0,
-      "trang_thai": "Đúng một phần",
-      "cham_tung_dong": [
-        {
-          "dong": "dòng học sinh viết",
-          "ket_qua": "✓ Đúng",
-          "ghi_chu": ""
-        }
-      ],
-      "diem_tieu_chi": [
-        {
-          "tieu_chi": "mô tả tiêu chí",
-          "dat": true,
-          "diem": 0.5
-        }
-      ],
-      "loi_sai": "",
-      "goi_y_sua": ""
-    }
-  ]
+“tong_diem”: 0,
+“diem_toi_da”: 0,
+“phan_tram”: 0,
+“xep_loai”: “Yếu”,
+“nhan_xet_chung”: “”,
+“cac_cau”: [
+{
+“so_cau”: “Câu 1a”,
+“diem_dat”: 0,
+“diem_toi_da”: 0,
+“trang_thai”: “Đúng”,
+“co_nghi_van_rubric”: false,
+“ghi_chu_noi_bo”: “”,
+“cham_tung_dong”: [
+{“dong”: “”, “ket_qua”: “✓ Đúng”, “ghi_chu”: “”},
+{“dong”: “”, “ket_qua”: “✗ Sai”, “ghi_chu”: “Sai vì … Đúng: $…$”}
+],
+“diem_tieu_chi”: [{“tieu_chi”: “”, “dat”: false, “diem”: 0}],
+“loi_sai”: “”,
+“goi_y_sua”: “”
 }
-\`\`\``;
+]
+}
+````;
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 16000,
-    temperature: 0,
-    messages: [{ role: 'user', content: prompt }]
-  });
+const response = await client.messages.create({
+model: ‘claude-sonnet-4-6’,
+max_tokens: 16000,
+temperature: 0,
+messages: [{ role: ‘user’, content: prompt }]
+});
 
-  const rawText = response?.content?.[0]?.text || '';
-  let jsonText = extractJsonBlock(rawText);
+const raw = response.content[0].text;
+const m = raw.match(/`json\n?([\s\S]*?)\n?`/) || raw.match(/({[\s\S]*})/);
+let jsonStr = m ? m[1] : raw;
+// Fix backslash: AI đôi khi gửi \frac thay vì \frac trong JSON string
+jsonStr = jsonStr.replace(/(?<!\)\(?=[a-zA-Z])/g, ‘\\’);
+// Fix JSON bị cắt giữa chừng
+jsonStr = repairJson(jsonStr);
+const parsed = JSON.parse(jsonStr);
 
-  jsonText = jsonText.replace(/(?<!\\)\\(?=[a-zA-Z])/g, '\\\\');
-  jsonText = repairJson(jsonText);
-
-  const parsed = parseJsonSafe(jsonText, {
-    tong_diem: 0,
-    diem_toi_da: rubric?.tong_diem || 0,
-    phan_tram: 0,
-    xep_loai: 'Yếu',
-    nhan_xet_chung: '',
-    cac_cau: []
-  });
-
-  return recalcFinalScore(parsed, rubric, transcribed);
+// ── Lớp 3: Tính lại điểm từ rubric ──
+return recomputeScoresFromRubric(parsed, rubric);
 }
 
-/* ============================================================================
- * Routes
- * ========================================================================== */
+// ── POST /api/grade ── Main endpoint: Gemini transcribe → Claude grade
+router.post(’/’, uploadMiddleware, async (req, res) => {
+try {
+const { rubric: rubricStr, studentName = ‘Học sinh’, subject = ‘Bài kiểm tra’ } = req.body;
 
-// POST /api/grade
-// Main flow: upload -> Gemini OCR -> Claude grade
-router.post('/', uploadMiddleware, async (req, res) => {
-  try {
-    const {
-      rubric: rubricStr,
-      studentName = 'Học sinh',
-      subject = 'Bài kiểm tra'
-    } = req.body;
+```
+if (!req.files?.length)
+  return res.status(400).json({ error: 'Vui lòng upload ít nhất 1 ảnh bài làm' });
+if (!rubricStr)
+  return res.status(400).json({ error: 'Vui lòng cung cấp rubric' });
 
-    if (!req.files?.length) {
-      return res.status(400).json({ error: 'Vui lòng upload ít nhất 1 ảnh bài làm' });
-    }
+let rubric;
+try { rubric = JSON.parse(rubricStr); }
+catch { return res.status(400).json({ error: 'Rubric không đúng định dạng JSON' }); }
 
-    if (!rubricStr) {
-      return res.status(400).json({ error: 'Vui lòng cung cấp rubric' });
-    }
+// Kiểm tra API keys
+if (!process.env.GEMINI_API_KEY)
+  return res.status(500).json({ error: 'Thiếu GEMINI_API_KEY trong biến môi trường' });
+if (!process.env.ANTHROPIC_API_KEY)
+  return res.status(500).json({ error: 'Thiếu ANTHROPIC_API_KEY trong biến môi trường' });
 
-    let rubric;
-    try {
-      rubric = typeof rubricStr === 'string' ? JSON.parse(rubricStr) : rubricStr;
-    } catch {
-      return res.status(400).json({ error: 'Rubric không đúng định dạng JSON' });
-    }
+console.log(`[${studentName}] Bắt đầu giai đoạn 1: Gemini OCR...`);
+const transcribed = await transcribeWithGemini(req.files, subject);
+console.log(`[${studentName}] Giai đoạn 1 xong. Bắt đầu giai đoạn 2: Claude chấm...`);
 
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: 'Thiếu GEMINI_API_KEY trong biến môi trường' });
-    }
+const gradingResult = await gradeWithClaude(transcribed, rubric, studentName, subject);
+console.log(`[${studentName}] Hoàn thành. Điểm: ${gradingResult.tong_diem}/${gradingResult.diem_toi_da}`);
 
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(500).json({ error: 'Thiếu ANTHROPIC_API_KEY trong biến môi trường' });
-    }
+const resultId = uuidv4();
+const resultData = {
+  id: resultId, studentName, subject,
+  gradingResult, transcribed,
+  imageFiles: req.files.map(f => f.filename),
+  rubric, createdAt: new Date().toISOString()
+};
 
-    console.log(`[${studentName}] Bắt đầu OCR bằng Gemini...`);
-    const transcribed = await transcribeWithGemini(req.files, subject);
+const resultsDir = path.join(__dirname, '../results');
+if (!fs.existsSync(resultsDir)) fs.mkdirSync(resultsDir, { recursive: true });
+fs.writeFileSync(path.join(resultsDir, `${resultId}.json`), JSON.stringify(resultData, null, 2));
 
-    console.log(`[${studentName}] OCR xong, bắt đầu chấm bằng Claude...`);
-    const gradingResult = await gradeWithClaude(transcribed, rubric, studentName, subject);
+res.json({
+  success: true, resultId, studentName, subject,
+  gradingResult, transcribed,
+  imageUrls: req.files.map(f => `/uploads/${f.filename}`)
+});
+```
 
-    console.log(
-      `[${studentName}] Hoàn thành. Điểm: ${gradingResult.tong_diem}/${gradingResult.diem_toi_da}`
-    );
-
-    const resultId = uuidv4();
-    const resultData = {
-      id: resultId,
-      studentName,
-      subject,
-      gradingResult,
-      transcribed,
-      imageFiles: req.files.map(f => f.filename),
-      rubric,
-      createdAt: new Date().toISOString()
-    };
-
-    fs.writeFileSync(
-      path.join(resultsDir, `${resultId}.json`),
-      JSON.stringify(resultData, null, 2),
-      'utf8'
-    );
-
-    return res.json({
-      success: true,
-      resultId,
-      studentName,
-      subject,
-      gradingResult,
-      transcribed,
-      imageUrls: req.files.map(f => `/uploads/${f.filename}`)
-    });
-  } catch (error) {
-    console.error('Lỗi chấm bài:', error);
-    return res.status(500).json({ error: error.message || 'Lỗi không xác định' });
-  }
+} catch (error) {
+console.error(‘Lỗi chấm bài:’, error);
+res.status(500).json({ error: error.message });
+}
 });
 
-// POST /api/grade/transcribe
-// OCR only
-router.post('/transcribe', uploadMiddleware, async (req, res) => {
-  try {
-    if (!req.files?.length) {
-      return res.status(400).json({ error: 'Vui lòng upload ít nhất 1 ảnh' });
-    }
+// ── POST /api/grade/transcribe ── Chỉ OCR (dùng Gemini)
+router.post(’/transcribe’, uploadMiddleware, async (req, res) => {
+try {
+if (!req.files?.length) return res.status(400).json({ error: ‘Vui lòng upload ít nhất 1 ảnh’ });
+const { subject = ‘Toán’ } = req.body;
+const transcribed = await transcribeWithGemini(req.files, subject);
 
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: 'Thiếu GEMINI_API_KEY trong biến môi trường' });
-    }
+```
+const sessionId = uuidv4();
+const sessionsDir = path.join(__dirname, '../results/sessions');
+if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+fs.writeFileSync(
+  path.join(sessionsDir, `${sessionId}.json`),
+  JSON.stringify({ sessionId, imageFiles: req.files.map(f => f.filename), transcribed, createdAt: new Date().toISOString() }, null, 2)
+);
 
-    const { subject = 'Toán' } = req.body;
-    const transcribed = await transcribeWithGemini(req.files, subject);
-    const sessionId = uuidv4();
+res.json({ success: true, sessionId, transcribed, imageUrls: req.files.map(f => `/uploads/${f.filename}`) });
+```
 
-    fs.writeFileSync(
-      path.join(sessionsDir, `${sessionId}.json`),
-      JSON.stringify(
-        {
-          sessionId,
-          imageFiles: req.files.map(f => f.filename),
-          transcribed,
-          createdAt: new Date().toISOString()
-        },
-        null,
-        2
-      ),
-      'utf8'
-    );
-
-    return res.json({
-      success: true,
-      sessionId,
-      transcribed,
-      imageUrls: req.files.map(f => `/uploads/${f.filename}`)
-    });
-  } catch (error) {
-    console.error('Lỗi OCR:', error);
-    return res.status(500).json({ error: error.message || 'Lỗi không xác định' });
-  }
+} catch (error) {
+res.status(500).json({ error: error.message });
+}
 });
 
-// POST /api/grade/score
-// Grade only
-router.post('/score', async (req, res) => {
-  try {
-    const {
-      sessionId,
-      transcribed,
-      rubric: rubricStr,
-      studentName = 'Học sinh',
-      subject = 'Bài kiểm tra'
-    } = req.body;
+// ── POST /api/grade/score ── Chỉ chấm (dùng Claude)
+router.post(’/score’, async (req, res) => {
+try {
+const { sessionId, transcribed, rubric: rubricStr, studentName = ‘Học sinh’, subject = ‘Bài kiểm tra’ } = req.body;
+if (!transcribed || !rubricStr) return res.status(400).json({ error: ‘Thiếu dữ liệu’ });
 
-    if (!transcribed || !rubricStr) {
-      return res.status(400).json({ error: 'Thiếu dữ liệu' });
-    }
+```
+let rubric;
+try { rubric = typeof rubricStr === 'string' ? JSON.parse(rubricStr) : rubricStr; }
+catch { return res.status(400).json({ error: 'Rubric không đúng JSON' }); }
 
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(500).json({ error: 'Thiếu ANTHROPIC_API_KEY trong biến môi trường' });
-    }
+const gradingResult = await gradeWithClaude(transcribed, rubric, studentName, subject);
 
-    let rubric;
-    try {
-      rubric = typeof rubricStr === 'string' ? JSON.parse(rubricStr) : rubricStr;
-    } catch {
-      return res.status(400).json({ error: 'Rubric không đúng JSON' });
-    }
+let imageFiles = [];
+if (sessionId) {
+  const sp = path.join(__dirname, '../results/sessions', `${sessionId}.json`);
+  if (fs.existsSync(sp)) imageFiles = JSON.parse(fs.readFileSync(sp, 'utf8')).imageFiles;
+}
 
-    const gradingResult = await gradeWithClaude(transcribed, rubric, studentName, subject);
+const resultId = uuidv4();
+const resultData = { id: resultId, studentName, subject, gradingResult, transcribed, imageFiles, rubric, createdAt: new Date().toISOString() };
+fs.writeFileSync(path.join(__dirname, '../results', `${resultId}.json`), JSON.stringify(resultData, null, 2));
 
-    let imageFiles = [];
-    if (sessionId) {
-      const sessionPath = path.join(sessionsDir, `${sessionId}.json`);
-      if (fs.existsSync(sessionPath)) {
-        const sessionData = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
-        imageFiles = normalizeArray(sessionData.imageFiles);
-      }
-    }
+res.json({ success: true, resultId, studentName, subject, gradingResult, transcribed, imageUrls: imageFiles.map(f => `/uploads/${f}`) });
+```
 
-    const resultId = uuidv4();
-    const resultData = {
-      id: resultId,
-      studentName,
-      subject,
-      gradingResult,
-      transcribed,
-      imageFiles,
-      rubric,
-      createdAt: new Date().toISOString()
-    };
-
-    fs.writeFileSync(
-      path.join(resultsDir, `${resultId}.json`),
-      JSON.stringify(resultData, null, 2),
-      'utf8'
-    );
-
-    return res.json({
-      success: true,
-      resultId,
-      studentName,
-      subject,
-      gradingResult,
-      transcribed,
-      imageUrls: imageFiles.map(f => `/uploads/${f}`)
-    });
-  } catch (error) {
-    console.error('Lỗi chấm điểm:', error);
-    return res.status(500).json({ error: error.message || 'Lỗi không xác định' });
-  }
+} catch (error) {
+res.status(500).json({ error: error.message });
+}
 });
 
-// GET /api/grade/:id
-router.get('/:id', (req, res) => {
-  try {
-    const filePath = path.join(resultsDir, `${req.params.id}.json`);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Không tìm thấy' });
-    }
-
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    return res.json(data);
-  } catch (error) {
-    console.error('Lỗi đọc kết quả:', error);
-    return res.status(500).json({ error: error.message || 'Lỗi không xác định' });
-  }
+// ── GET /api/grade/:id
+router.get(’/:id’, (req, res) => {
+const fp = path.join(__dirname, ‘../results’, `${req.params.id}.json`);
+if (!fs.existsSync(fp)) return res.status(404).json({ error: ‘Không tìm thấy’ });
+res.json(JSON.parse(fs.readFileSync(fp, ‘utf8’)));
 });
 
-// GET /api/grade
-router.get('/', (req, res) => {
-  try {
-    if (!fs.existsSync(resultsDir)) {
-      return res.json([]);
-    }
-
-    const list = fs.readdirSync(resultsDir)
-      .filter(name => name.endsWith('.json'))
-      .map(name => {
-        const filePath = path.join(resultsDir, name);
-        const d = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        return {
-          id: d.id,
-          studentName: d.studentName,
-          subject: d.subject,
-          tongDiem: d.gradingResult?.tong_diem,
-          diemToiDa: d.gradingResult?.diem_toi_da,
-          createdAt: d.createdAt
-        };
-      })
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    return res.json(list);
-  } catch (error) {
-    console.error('Lỗi lấy danh sách kết quả:', error);
-    return res.status(500).json({ error: error.message || 'Lỗi không xác định' });
-  }
+// ── GET /api/grade
+router.get(’/’, (req, res) => {
+const dir = path.join(__dirname, ‘../results’);
+if (!fs.existsSync(dir)) return res.json([]);
+const list = fs.readdirSync(dir).filter(f => f.endsWith(’.json’)).map(f => {
+const d = JSON.parse(fs.readFileSync(path.join(dir, f), ‘utf8’));
+return { id: d.id, studentName: d.studentName, subject: d.subject, tongDiem: d.gradingResult?.tong_diem, diemToiDa: d.gradingResult?.diem_toi_da, createdAt: d.createdAt };
+});
+list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+res.json(list);
 });
 
 module.exports = router;
