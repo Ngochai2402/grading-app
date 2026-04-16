@@ -2,75 +2,50 @@ import { useEffect, useRef, useState } from "react";
 
 const API = "https://grading-app-production-2949.up.railway.app";
 
-// ── Load KaTeX một lần, inject vào <head> ──────────────────────────────────
-let _katexState = "idle";
-const _katexCbs = [];
-
-function ensureKatex(cb) {
-  if (_katexState === "ready") { cb(); return; }
-  _katexCbs.push(cb);
-  if (_katexState === "loading") return;
-  _katexState = "loading";
+// ── Inject KaTeX + auto-render một lần ──────────────────────────────────────
+let _loaded = false;
+function injectKatex(cb) {
+  if (_loaded && window.renderMathInElement) { cb(); return; }
 
   const css = document.createElement("link");
   css.rel = "stylesheet";
   css.href = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css";
   document.head.appendChild(css);
 
-  const js = document.createElement("script");
-  js.src = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js";
-  js.onload = () => {
-    _katexState = "ready";
-    _katexCbs.forEach(f => f());
-    _katexCbs.length = 0;
+  // Load katex.min.js
+  const s1 = document.createElement("script");
+  s1.src = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js";
+  s1.onload = () => {
+    // Sau khi katex load xong, load auto-render
+    const s2 = document.createElement("script");
+    s2.src = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js";
+    s2.onload = () => { _loaded = true; cb(); };
+    document.head.appendChild(s2);
   };
-  document.head.appendChild(js);
+  document.head.appendChild(s1);
 }
 
-// ── Render string có $...$ thành HTML ───────────────────────────────────────
-function renderMathString(text) {
-  if (!text || !window.katex) return escapeHtml(text || "");
-  const parts = [];
-  const re = /\$([^$
-]+?)\$/g;
-  let last = 0, m;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(escapeHtml(text.slice(last, m.index)));
-    try {
-      parts.push(window.katex.renderToString(m[1], { throwOnError: false, strict: false }));
-    } catch {
-      parts.push(escapeHtml(`$${m[1]}$`));
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) parts.push(escapeHtml(text.slice(last)));
-  return parts.join("");
-}
-
-function escapeHtml(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-// ── Component tự động re-render khi KaTeX load xong ─────────────────────────
+// ── Component dùng auto-render quét toàn bộ $...$ trong DOM ─────────────────
 function MathText({ text, style }) {
-  const [html, setHtml] = useState(() => escapeHtml(text || ""));
-  const [ready, setReady] = useState(_katexState === "ready");
+  const ref = useRef(null);
 
   useEffect(() => {
-    if (_katexState === "ready") {
-      setReady(true);
-    } else {
-      ensureKatex(() => setReady(true));
-    }
-  }, []);
+    if (!text || !ref.current) return;
+    ref.current.textContent = text; // Set text thô trước
+    injectKatex(() => {
+      if (!ref.current) return;
+      window.renderMathInElement(ref.current, {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "$", right: "$", display: false },
+        ],
+        throwOnError: false,
+        strict: false,
+      });
+    });
+  }, [text]);
 
-  useEffect(() => {
-    if (ready && text !== undefined) {
-      setHtml(renderMathString(text || ""));
-    }
-  }, [ready, text]);
-
-  return <span style={style} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <span ref={ref} style={style}>{text}</span>;
 }
 
 // ── ResultPage ────────────────────────────────────────────────────────────────
@@ -97,10 +72,9 @@ export default function ResultPage({ result, onBack }) {
           <h1 style={{ fontFamily: "'Playfair Display',serif", fontSize: 24, fontWeight: 700 }}>Kết quả chấm bài</h1>
           <div style={{ fontSize: 13, color: "var(--text2)" }}>{studentName} • {subject}</div>
         </div>
-        <a href={`${API}/api/export/${resultId}/pdf`} target="_blank" rel="noreferrer"
-          className="btn btn-primary" style={{ fontSize: 13, marginRight: 8 }}>📄 Xuất PDF</a>
-        <a href={`${API}/api/export/${resultId}/html`} target="_blank" rel="noreferrer"
-          className="btn btn-outline" style={{ fontSize: 13 }}>🖨️ In HTML</a>
+        <a href={`${API}/api/export/${resultId}/annotated-all`} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ fontSize: 13, marginRight: 6 }}>📝 Bài đã chấm</a>
+        <a href={`${API}/api/export/${resultId}/pdf`} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ fontSize: 13, marginRight: 6 }}>📄 Xuất PDF</a>
+        <a href={`${API}/api/export/${resultId}/html`} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ fontSize: 13 }}>🖨️ In HTML</a>
       </div>
 
       {/* ĐIỂM TỔNG */}
@@ -143,8 +117,8 @@ export default function ResultPage({ result, onBack }) {
                 {cau.cham_tung_dong?.length > 0 && (
                   <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                     <colgroup>
-                      <col style={{ width: "80%" }} />
-                      <col style={{ width: "20%" }} />
+                      <col style={{ width: "75%" }} />
+                      <col style={{ width: "25%" }} />
                     </colgroup>
                     <tbody>
                       {cau.cham_tung_dong.map((dong, j) => {
@@ -154,15 +128,12 @@ export default function ResultPage({ result, onBack }) {
                         const kqColor = isSai ? "var(--accent)" : isDung ? "var(--green)" : "var(--amber)";
                         return (
                           <tr key={j} style={{ background: bg, borderTop: j > 0 ? "1px solid var(--border)" : "none" }}>
-                            {/* Dòng học sinh */}
-                            <td style={{ padding: "9px 14px", fontSize: 13, lineHeight: 1.7, verticalAlign: "top", wordBreak: "break-word" }}>
+                            <td style={{ padding: "10px 14px", fontSize: 13.5, lineHeight: 1.8, verticalAlign: "middle", wordBreak: "break-word" }}>
                               <MathText text={dong.dong} />
                             </td>
-                            {/* Kết quả */}
-                            <td style={{ padding: "9px 8px", fontWeight: 700, color: kqColor, fontSize: 13, verticalAlign: "top", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "10px 12px", fontWeight: 700, color: kqColor, fontSize: 13, verticalAlign: "middle", whiteSpace: "nowrap" }}>
                               {dong.ket_qua}
                             </td>
-
                           </tr>
                         );
                       })}
@@ -172,12 +143,12 @@ export default function ResultPage({ result, onBack }) {
 
                 {/* Lỗi + Gợi ý */}
                 {cau.loi_sai && (
-                  <div style={{ padding: "10px 16px", background: "#fff5f5", fontSize: 13, color: "#c62828", borderTop: "1px solid #fdd", lineHeight: 1.6 }}>
+                  <div style={{ padding: "10px 16px", background: "#fff5f5", fontSize: 13, color: "#c62828", borderTop: "1px solid #fdd", lineHeight: 1.7 }}>
                     ✗ <strong>Lỗi:</strong> <MathText text={cau.loi_sai} />
                   </div>
                 )}
                 {cau.goi_y_sua && (
-                  <div style={{ padding: "10px 16px", background: "#f0f7ff", fontSize: 13, color: "#1565c0", borderTop: "1px solid #d0e4ff", lineHeight: 1.6 }}>
+                  <div style={{ padding: "10px 16px", background: "#f0f7ff", fontSize: 13, color: "#1565c0", borderTop: "1px solid #d0e4ff", lineHeight: 1.7 }}>
                     💡 <MathText text={cau.goi_y_sua} />
                   </div>
                 )}
