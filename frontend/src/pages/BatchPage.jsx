@@ -447,7 +447,7 @@ function StudentCard({ student, idx, running, onNameChange, onAddImages, onRemov
               cursor: running ? "not-allowed" : "pointer",
               transition: "all 0.15s", textAlign: images.length ? "left" : "center",
             }}
-            onClick={() => !running && fileRef?.click()}
+            onClick={() => !running && fileRef.current?.click()}
             onDragOver={e => { if (!running) { e.preventDefault(); setDragging(true); } }}
             onDragLeave={() => setDragging(false)}
             onDrop={e => {
