@@ -218,25 +218,15 @@ ${baiLamText}
 ${JSON.stringify(rubric, null, 2)}
 
 === NGUYÊN TẮC CHẤM BẮT BUỘC ===
-1. CHỈ chấm theo RUBRIC CHÍNH THỨC.
-2. KHÔNG được tự sửa đề, tự sửa đáp án, tự nghi ngờ rubric.
-3. Nếu bài làm có dấu hiệu đúng về mặt toán nhưng KHÔNG khớp rubric/đáp án chính thức:
-   - vẫn chấm theo rubric chính thức,
-   - đồng thời ghi "co_nghi_van_rubric": true ở câu đó,
-   - và ghi ngắn gọn lý do vào "ghi_chu_noi_bo".
-4. Chấm theo TỪNG TIÊU CHÍ của rubric:
-   - đạt tiêu chí nào thì chỉ cho đúng số điểm của tiêu chí đó,
-   - không tự cộng điểm vượt rubric.
-5. Nếu học sinh bỏ trống hoàn toàn câu nào:
-   - điểm câu đó = 0,
-   - mọi tiêu chí đều "dat": false.
-6. Nếu học sinh làm nhầm câu khác:
-   - chỉ chấm theo đúng số câu rubric tương ứng,
-   - không chuyển điểm từ câu này sang câu khác.
-7. Cách làm khác đáp án vẫn được chấp nhận CHỈ KHI đúng toán VÀ thỏa yêu cầu tiêu chí rubric.
-8. KHÔNG tranh luận với đáp án chính thức.
-9. "tong_diem" phải bằng tổng điểm các câu.
-10. "diem_dat" của mỗi câu phải bằng tổng các mục "diem_tieu_chi" được chấm đạt.
+1. Chấm ĐÚNG theo bài làm thực tế — KHÔNG suy diễn, KHÔNG thêm bước học sinh không viết.
+2. CHỈ cho điểm những gì học sinh THỰC SỰ viết ra.
+3. Chỉ cho điểm tiêu chí học sinh thể hiện rõ ràng — còn nghi ngờ thì KHÔNG cho.
+4. Cách làm khác đáp án vẫn được nếu đúng toán VÀ đáp ứng tiêu chí rubric.
+5. Nếu học sinh bỏ trống: điểm = 0, cham_tung_dong để rỗng [].
+6. KHÔNG viết lời giải vào "dong" hay "ghi_chu" — chỉ chép lại đúng bài học sinh viết.
+7. "loi_sai": mô tả ngắn lỗi thực tế học sinh mắc (nếu có).
+8. "goi_y_sua": 1 câu gợi ý ngắn để học sinh tự sửa, KHÔNG viết lời giải.
+9. "tong_diem" = tổng diem_dat các câu.
 
 === QUY TẮC TRÌNH BÀY ===
 1. Tách biệt chữ tiếng Việt và công thức toán:
@@ -244,33 +234,29 @@ ${JSON.stringify(rubric, null, 2)}
    - Công thức, số, biến số: viết trong dấu $...$
    - ❌ SAI: $Thay y = 2x vào y = -2x^2, ta được$
    - ✅ ĐÚNG: Thay $y = 2x$ vào $y = -2x^2$, ta được: $2x = -2x^2$
-   - ✅ ĐÚNG: $x_1 + x_2 = \\\\frac{7}{2}$, $\\\\Delta = 17$, $\\\\sqrt{36}$
 2. "ket_qua": chỉ ghi "✓ Đúng" hoặc "✗ Sai"
 3. "ghi_chu": để ""
-4. "ghi_chu_noi_bo": ngắn gọn tối đa 1 câu, dùng để cảnh báo nội bộ nếu cần
-5. Không thêm bất kỳ lời giải thích nào ngoài JSON
+4. Không thêm bất kỳ lời giải thích nào ngoài JSON
 
-=== JSON BẮT BUỘC ===
+Trả về JSON:
 \`\`\`json
 {
   "tong_diem": 0,
   "diem_toi_da": 0,
-  "phan_tram": 0,
-  "xep_loai": "Yếu",
-  "nhan_xet_chung": "",
+  "phan_tram": 0.0,
+  "xep_loai": "Giỏi",
+  "nhan_xet_chung": "nhận xét ngắn",
   "cac_cau": [
     {
-      "so_cau": "Câu 1a",
+      "so_cau": "Câu 1",
       "diem_dat": 0,
       "diem_toi_da": 0,
       "trang_thai": "Đúng",
-      "co_nghi_van_rubric": false,
-      "ghi_chu_noi_bo": "",
       "cham_tung_dong": [
-        {"dong": "", "ket_qua": "✓ Đúng", "ghi_chu": ""},
-        {"dong": "", "ket_qua": "✗ Sai", "ghi_chu": "Sai vì ... Đúng: $...$"}
+        {"dong": "dòng học sinh viết, công thức trong $...$", "ket_qua": "✓ Đúng", "ghi_chu": ""},
+        {"dong": "dòng sai", "ket_qua": "✗ Sai", "ghi_chu": ""}
       ],
-      "diem_tieu_chi": [{"tieu_chi": "", "dat": false, "diem": 0}],
+      "diem_tieu_chi": [{"tieu_chi": "tiêu chí", "dat": true, "diem": 0}],
       "loi_sai": "",
       "goi_y_sua": ""
     }
