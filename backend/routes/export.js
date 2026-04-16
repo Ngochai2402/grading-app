@@ -427,28 +427,26 @@ function escLat(s) {
   if (!s) return '';
   return String(s)
     .replace(/\\/g, '\\textbackslash{}')
-    .replace(/&/g, '\\&').replace(/%/g, '\\%').replace(/\$/g, '\\$')
-    .replace(/#/g, '\\#').replace(/_/g, '\\_').replace(/\^/g, '\\^{}')
-    .replace(/\{/g, '\\{').replace(/\}/g, '\\}')
+    .replace(/&/g, '\\&')
+    .replace(/%/g, '\\%')
+    .replace(/#/g, '\\#')
     .replace(/~/g, '\\textasciitilde{}')
-    .replace(/</g, '\\textless{}').replace(/>/g, '\\textgreater{}');
+    .replace(/</g, '\\textless{}')
+    .replace(/>/g, '\\textgreater{}');
 }
 
 function unicodeToLatex(s) {
   if (!s) return '';
-  return s
-    .replace(/x₁x₂/g, '$x_1 x_2$').replace(/x₁/g, '$x_1$').replace(/x₂/g, '$x_2$')
-    .replace(/x₃/g, '$x_3$').replace(/x₄/g, '$x_4$')
-    .replace(/\(([^)]+)\)²/g, (m,p) => `$(${p})^2$`)
-    .replace(/([A-Za-z0-9])²/g, '$$$1^2$$').replace(/([A-Za-z0-9])³/g, '$$$1^3$$')
-    .replace(/√(\d+)/g, '$\\sqrt{$1}$')
-    .replace(/(\d+)\/(\d+)/g, '$\\frac{$1}{$2}$')
-    .replace(/Δ|△/g, '$\\Delta$').replace(/≈/g, '$\\approx$')
-    .replace(/≤/g, '$\\leq$').replace(/≥/g, '$\\geq$')
-    .replace(/⟹/g, '$\\Rightarrow$').replace(/→/g, '$\\to$')
-    .replace(/≠/g, '$\\neq$').replace(/∈/g, '$\\in$')
-    .replace(/&/g, '\\&').replace(/%/g, '\\%').replace(/#/g, '\\#')
-    .replace(/(?<!\$)_(?!\{)/g, '\\_');
+  const parts = [];
+  const re = /\$([^$\n]+?)\$/g;
+  let last = 0, m;
+  while ((m = re.exec(s)) !== null) {
+    if (m.index > last) parts.push(escLat(s.slice(last, m.index)));
+    parts.push('$' + m[1] + '$');
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) parts.push(escLat(s.slice(last)));
+  return parts.join('');
 }
 
 function scoreColor(pct) {
