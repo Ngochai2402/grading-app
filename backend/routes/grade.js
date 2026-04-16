@@ -99,6 +99,44 @@ Trả về JSON (không thêm text nào khác):
   return JSON.parse(m ? m[1] : text);
 }
 
+// ── Sửa JSON bị cắt giữa chừng ──────────────────────────────────────────────
+function repairJson(str) {
+  // Cắt bỏ phần thừa sau object chính
+  let s = str.trim();
+  // Đếm số dấu mở/đóng để đóng nốt
+  let opens = 0, inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\' && inStr) { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') opens++;
+    if (c === '}' || c === ']') opens--;
+  }
+  // Nếu JSON bị cắt (opens > 0), thử đóng lại
+  if (opens > 0) {
+    // Tìm điểm cắt hợp lý: kết thúc object cuối cùng hoàn chỉnh trong cac_cau
+    // Đơn giản: trim trailing comma rồi đóng
+    s = s.replace(/,\s*$/, '');
+    // Đóng các cấu trúc còn hở
+    const stack = [];
+    inStr = false; esc = false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (esc) { esc = false; continue; }
+      if (c === '\\' && inStr) { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') stack.push('}');
+      else if (c === '[') stack.push(']');
+      else if ((c === '}' || c === ']') && stack.length) stack.pop();
+    }
+    s += stack.reverse().join('');
+  }
+  return s;
+}
+
 // ── GIAI ĐOẠN 2: Claude chấm từng dòng ──────────────────────────────────────
 async function gradeWithClaude(transcribed, rubric, studentName, subject) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -160,7 +198,7 @@ Trả về JSON:
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 8192,
+    max_tokens: 16000,
     temperature: 0,
     messages: [{ role: 'user', content: prompt }]
   });
@@ -170,6 +208,8 @@ Trả về JSON:
   let jsonStr = m ? m[1] : raw;
   // Fix backslash: AI đôi khi gửi \frac thay vì \\frac trong JSON string
   jsonStr = jsonStr.replace(/(?<!\\)\\(?=[a-zA-Z])/g, '\\\\');
+  // Fix JSON bị cắt giữa chừng: đóng mảng/object còn hở
+  jsonStr = repairJson(jsonStr);
   const parsed = JSON.parse(jsonStr);
 
   // Override diem_toi_da và phan_tram từ rubric (tránh AI tự tính sai khi HS bỏ nhiều câu)
