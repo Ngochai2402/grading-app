@@ -125,12 +125,17 @@ ${JSON.stringify(rubric, null, 2)}
 
 === FORMAT BẮT BUỘC ===
 
-1. Mọi công thức toán PHẢI trong dấu $…$
-   Ví dụ đúng: $x_1 + x_2 = \frac{7}{2}$, $\Delta = 17$, $\sqrt{36}$
+1. TÁCH BIỆT chữ tiếng Việt và công thức toán:
+- Chữ tiếng Việt: viết NGOÀI dấu $
+- Công thức, số, biến số: viết TRONG dấu $…$
+- ❌ SAI: $Thay y = 2x vào y = -2x^2, ta được$
+- ✅ ĐÚNG: Thay $y = 2x$ vào $y = -2x^2$, ta được: $2x = -2x^2$
+- ✅ ĐÚNG: $x_1 + x_2 = \frac{7}{2}$, $\Delta = 17$, $\sqrt{36}$
 1. “ket_qua”: CHỈ ghi “✓ Đúng” hoặc “✗ Sai”
 1. “ghi_chu”:
 - Nếu ✓ Đúng: để TRỐNG “”
-- Nếu ✗ Sai: viết ngắn gọn lý do và kết quả đúng, dùng $…$
+- Nếu ✗ Sai: giải thích ngắn, công thức trong $…$
+  Ví dụ: “Sai: $\frac{-1}{-\frac{1}{2}} = 2$, không phải $\frac{1}{2}$”
 
 Trả về JSON:
 ```json
