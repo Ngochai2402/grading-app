@@ -31,7 +31,7 @@ export default function BatchPage() {
   const [done, setDone] = useState(false);
   const [showRubric, setShowRubric] = useState(false);
 
-  const fileRefs = useRef({});
+
 
   // ── helpers ──────────────────────────────────────────────────────────────────
   const updateStudent = (id, patch) =>
@@ -233,7 +233,6 @@ export default function BatchPage() {
           student={student}
           idx={idx}
           running={running}
-          fileRef={el => fileRefs.current[student.id] = el}
           onNameChange={name => updateStudent(student.id, { name })}
           onAddImages={files => addImages(student.id, files)}
           onRemoveImage={i => removeImage(student.id, i)}
@@ -306,8 +305,9 @@ export default function BatchPage() {
 }
 
 // ── StudentCard ───────────────────────────────────────────────────────────────
-function StudentCard({ student, idx, running, fileRef, onNameChange, onAddImages, onRemoveImage, onRemove, onRetry, isActive }) {
+function StudentCard({ student, idx, running, onNameChange, onAddImages, onRemoveImage, onRemove, onRetry, isActive }) {
   const [dragging, setDragging] = useState(false);
+  const fileRef = useRef(null);
   const { status, result, error, name, images } = student;
 
   const statusColor = {
