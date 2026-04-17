@@ -367,14 +367,17 @@ ${baiLamText}${ocrWarningText}
     }
   ];
 
-  // Sonnet 4.6 hỗ trợ tối đa 64k output tokens — tương thích mọi version SDK
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 64000,
-    temperature: 0,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userContent }]
-  });
+  // Sonnet 4.6 hỗ trợ tối đa 64k output tokens
+  // SDK ^0.60.0 bắt buộc streaming khi max_tokens lớn — dùng getFinalMessage()
+  const response = await client.messages
+    .stream({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 64000,
+      temperature: 0,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userContent }]
+    })
+    .getFinalMessage();
 
   // Log cache usage để theo dõi tiết kiệm
   const usage = response.usage || {};
