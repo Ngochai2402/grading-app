@@ -367,17 +367,14 @@ ${baiLamText}${ocrWarningText}
     }
   ];
 
-  // Dùng streaming để tránh HTTP timeout khi output dài (bắt buộc khi max_tokens > ~4096)
-  // Sonnet 4.6 hỗ trợ tối đa 64k output tokens
-  const stream = await client.messages.stream({
+  // Sonnet 4.6 hỗ trợ tối đa 64k output tokens — tương thích mọi version SDK
+  const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 64000,
     temperature: 0,
     system: systemPrompt,
     messages: [{ role: 'user', content: userContent }]
   });
-
-  const response = await stream.getFinalMessage();
 
   // Log cache usage để theo dõi tiết kiệm
   const usage = response.usage || {};
