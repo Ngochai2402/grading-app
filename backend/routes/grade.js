@@ -129,8 +129,8 @@ async function runGemini(files, prompt) {
   const model = genAI.getGenerativeModel({ 
     model: 'gemini-2.5-flash',
     generationConfig: {
-      temperature: 0,  // Deterministic để OCR nhất quán
-      maxOutputTokens: 8192
+      temperature: 0,       // Deterministic để OCR nhất quán
+      maxOutputTokens: 65536 // Tối đa của Gemini 2.5 Flash — tránh bị cắt khi bài nhiều câu
     }
   });
 
@@ -367,13 +367,17 @@ ${baiLamText}${ocrWarningText}
     }
   ];
 
-  const response = await client.messages.create({
+  // Dùng streaming để tránh HTTP timeout khi output dài (bắt buộc khi max_tokens > ~4096)
+  // Sonnet 4.6 hỗ trợ tối đa 64k output tokens
+  const stream = await client.messages.stream({
     model: 'claude-sonnet-4-6',
-    max_tokens: 16000,
+    max_tokens: 64000,
     temperature: 0,
     system: systemPrompt,
     messages: [{ role: 'user', content: userContent }]
   });
+
+  const response = await stream.getFinalMessage();
 
   // Log cache usage để theo dõi tiết kiệm
   const usage = response.usage || {};
