@@ -467,7 +467,6 @@ ${dongRows}
 \\hline
 \\end{longtable}
 ${loiSai}
-${goiY}
 \\vspace{4pt}`;
   }).join('\n');
 
