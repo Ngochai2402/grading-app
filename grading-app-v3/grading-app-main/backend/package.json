@@ -1,7 +1,7 @@
 {
   "name": "grading-app-backend",
-  "version": "3.0.0",
-  "description": "Backend chấm bài tự luận - phiên bản tối giản (chỉ đúng/sai, PDF LaTeX ổn định)",
+  "version": "4.0.0",
+  "description": "Backend chấm bài tự luận v4 — chấm theo tiêu chí, auto-tách tiêu chí, độ tin cậy, cờ cần giáo viên xem",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
