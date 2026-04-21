@@ -416,40 +416,46 @@ document.addEventListener("DOMContentLoaded", function() {
 </body></html>`;
 }
 
-// ─── PDF export: mặc định dùng HTML auto-print (không phụ thuộc service ngoài)
-// ─────────────────────────────────────────────────────────────────────────────
-// LaTeX external service (Railway xelatex) rất dễ lỗi compile với font/math
-// phức tạp + tiếng Việt → mặc định TẮT. Người dùng luôn xuất được PDF qua
-// trình duyệt (Save as PDF từ hộp thoại in).
+// ─── PDF export ───────────────────────────────────────────────────────────────
+// Ưu tiên LaTeX (chất lượng cao) nếu có LATEX_SERVICE_URL được cấu hình.
+// Khi LaTeX lỗi bất kỳ (network/compile/timeout) → auto fallback HTML auto-print
+// để người dùng vẫn xuất được PDF từ trình duyệt.
 //
-// Bật lại LaTeX: set LATEX_ENABLED=1 và LATEX_SERVICE_URL=<url>.
-// Khi LaTeX lỗi bất kỳ (network / compile / timeout) → auto fallback HTML print.
-// KHÔNG BAO GIỜ trả JSON error từ endpoint này.
+// Query override:
+//   ?via=print  → ép dùng HTML print
+//   ?via=latex  → ép dùng LaTeX (hiện lỗi JSON nếu fail, dùng để debug)
+// Env:
+//   LATEX_SERVICE_URL — URL service xelatex (mặc định overlef-my)
+//   LATEX_DISABLED=1  — tắt hoàn toàn LaTeX, luôn HTML print
 router.get('/:id/pdf', async (req, res) => {
   const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).send('Không tìm thấy bài chấm');
-  }
+  if (!fs.existsSync(filePath)) return res.status(404).send('Không tìm thấy bài chấm');
 
   const redirectToPrint = (reason) => {
     if (reason) console.warn(`[PDF] → HTML print (${reason})`);
     return res.redirect(`/api/export/${req.params.id}/html?print=1`);
   };
 
-  // Default: HTML print. Chỉ thử LaTeX khi opt-in rõ ràng.
-  const latexEnabled = process.env.LATEX_ENABLED === '1' && process.env.LATEX_SERVICE_URL;
-  const forceLatex = req.query.via === 'latex';
   const forcePrint = req.query.via === 'print';
+  const forceLatex = req.query.via === 'latex';
+  const latexDisabled = process.env.LATEX_DISABLED === '1';
 
   if (forcePrint) return redirectToPrint('forced via=print');
-  if (!latexEnabled && !forceLatex) return redirectToPrint('default HTML print mode');
+  if (latexDisabled && !forceLatex) return redirectToPrint('LATEX_DISABLED');
 
-  // Nhánh LaTeX (opt-in): vẫn bọc try/catch toàn phần, bao giờ lỗi → fallback
+  const LATEX_URL = process.env.LATEX_SERVICE_URL || 'https://overlef-my-production.up.railway.app/compile';
+
+  let data, latex;
   try {
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    const latex = generateLatex(data);
-    const LATEX_URL = process.env.LATEX_SERVICE_URL;
+    data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    latex = generateLatex(data);
+  } catch (e) {
+    console.error('[PDF] Lỗi khi sinh LaTeX source:', e.message);
+    if (forceLatex) return res.status(500).json({ error: 'Lỗi sinh LaTeX', detail: e.message });
+    return redirectToPrint(`generateLatex: ${e.message}`);
+  }
 
+  try {
     const fetch = (await import('node-fetch')).default;
     const FormData = (await import('form-data')).default;
     const form = new FormData();
@@ -465,7 +471,15 @@ router.get('/:id/pdf', async (req, res) => {
 
     if (!r.ok) {
       const errText = await r.text();
-      console.error('[PDF/LaTeX]', r.status, errText.slice(0, 300));
+      console.error('═══ LATEX COMPILE ERROR ═══');
+      console.error('Student:', data.studentName, '· Result:', req.params.id);
+      console.error('Status:', r.status, '· Error:', errText.slice(0, 800));
+      console.error('── LaTeX source (1000 ký tự đầu) ──');
+      console.error(latex.slice(0, 1000));
+      console.error('═══════════════════════════');
+      if (forceLatex) {
+        return res.status(500).json({ error: 'LaTeX compile error', detail: errText.slice(0, 800) });
+      }
       return redirectToPrint(`LaTeX service ${r.status}`);
     }
 
@@ -474,6 +488,8 @@ router.get('/:id/pdf', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="cham-bai-${req.params.id}.pdf"`);
     return res.send(pdfBuffer);
   } catch (error) {
+    console.error('[PDF] Lỗi gọi LaTeX service:', error.message);
+    if (forceLatex) return res.status(500).json({ error: 'LaTeX service unreachable', detail: error.message });
     return redirectToPrint(error.message || 'unknown error');
   }
 });
@@ -491,37 +507,45 @@ function generateLatex(data) {
   const date = new Date(createdAt).toLocaleDateString('vi-VN');
 
   const cauBlocks = (cac_cau || []).map(cau => {
-    const pct2 = (cau.diem_dat / cau.diem_toi_da) * 100;
+    const diemDatNum = Number(cau.diem_dat || 0);
+    const diemMaxNum = Number(cau.diem_toi_da || 0);
+    const pct2 = diemMaxNum > 0 ? (diemDatNum / diemMaxNum) * 100 : 0;
     const cc = scoreColor(pct2);
     const trangThai = cau.trang_thai === 'Đúng' ? '{\\color{colorGioi}\\textbf{✓ Đúng}}' :
                       cau.trang_thai === 'Một phần' || cau.trang_thai === 'Đúng một phần' ? '{\\color{colorKha}\\textbf{◑ Một phần}}' :
                       cau.trang_thai === 'Bỏ trống' ? '{\\color{colorYeu}\\textbf{○ Bỏ trống}}' :
                       '{\\color{colorYeu}\\textbf{✗ Sai}}';
 
-    const dongRows = (cau.cham_tung_dong || []).map(d => {
+    const chamList = Array.isArray(cau.cham_tung_dong) ? cau.cham_tung_dong : [];
+    const dongRows = chamList.map(d => {
       const isDung = d.ket_qua?.includes('✓');
       const isSai  = d.ket_qua?.includes('✗');
       const kqColor = isDung ? '\\color{colorGioi}' : isSai ? '\\color{colorYeu}' : '\\color{colorKha}';
       const rowBg = isDung ? '\\rowcolor{bgDung}' : isSai ? '\\rowcolor{bgSai}' : '\\rowcolor{bgChap}';
-      const ghiChu = d.ghi_chu ? `\\footnotesize{${textToLatex(d.ghi_chu)}}` : '';
-      // Cảnh báo nếu dòng bị AI sửa và đã khôi phục
+      const ghiChu = d.ghi_chu ? `\\footnotesize{${textToLatex(d.ghi_chu)}}` : '~';
       const canhBaoLine = d.canh_bao ? ` {\\tiny\\color{colorKha}(${textToLatexPlain(d.canh_bao)})}` : '';
-      return `${rowBg} ${textToLatex(d.dong || '')}${canhBaoLine} & {${kqColor}\\textbf{${textToLatexPlain(d.ket_qua || '')}}} & ${ghiChu} \\\\`;
+      const dongText = textToLatex(d.dong || '') || '~';
+      const kqText = textToLatexPlain(d.ket_qua || '') || '~';
+      return `${rowBg} ${dongText}${canhBaoLine} & {${kqColor}\\textbf{${kqText}}} & ${ghiChu} \\\\`;
     }).join('\n');
 
     const loiSai = cau.loi_sai ? `\\vspace{2pt}\\noindent{\\color{colorYeu}\\small ✗ \\textbf{Lỗi:} ${textToLatex(cau.loi_sai)}}` : '';
-    const goiY   = cau.goi_y_sua ? `\\vspace{2pt}\\noindent{\\color{colorBlue}\\small 💡 ${textToLatex(cau.goi_y_sua)}}` : '';
 
-    return `
-\\subsection*{\\color{${cc}}${textToLatexPlain(cau.so_cau)} \\hfill ${cau.diem_dat}/${cau.diem_toi_da}đ \\quad ${trangThai}}
-\\vspace{-4pt}
-\\begin{longtable}{p{0.42\\textwidth} p{0.13\\textwidth} p{0.38\\textwidth}}
+    // Nếu không có dòng nào (HS bỏ trống / Claude bịa hết đã bị drop) → skip longtable
+    const chamBlock = chamList.length === 0
+      ? `\\vspace{2pt}\\noindent{\\small\\itshape\\color{colorKha}— Không có bước giải nào được ghi nhận cho câu này —}`
+      : `\\begin{longtable}{p{0.42\\textwidth} p{0.13\\textwidth} p{0.38\\textwidth}}
 \\hline
 \\rowcolor{bgHeader} \\textbf{Bài làm học sinh} & \\textbf{Kết quả} & \\textbf{Nhận xét} \\\\
 \\hline
 ${dongRows}
 \\hline
-\\end{longtable}
+\\end{longtable}`;
+
+    return `
+\\subsection*{\\color{${cc}}${textToLatexPlain(cau.so_cau || '')} \\hfill ${diemDatNum}/${diemMaxNum}đ \\quad ${trangThai}}
+\\vspace{-4pt}
+${chamBlock}
 ${loiSai}
 \\vspace{4pt}`;
   }).join('\n');
