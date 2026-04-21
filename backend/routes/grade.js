@@ -176,9 +176,14 @@ Số câu phải chấm: ${(rubric.cac_cau || []).length} — ${rubricCauList}
 
 === NGUYÊN TẮC CHẤM — BẮT BUỘC ===
 
-A. VỀ THAM CHIẾU DÒNG:
+A. VỀ THAM CHIẾU DÒNG — TUYỆT ĐỐI CẤM BỊA:
 - "dong_index" là SỐ NGUYÊN trong [] ở đầu mỗi dòng bài làm.
+- MỖI entry trong "cham_tung_dong" PHẢI có "dong_index" khớp với 1 dòng CÓ THẬT trong bài làm (từ [0] đến [${Math.max(indexedLines.length - 1, 0)}]).
 - TUYỆT ĐỐI KHÔNG viết lại, sửa, hoặc tóm tắt nội dung dòng. Chỉ điền số.
+- TUYỆT ĐỐI KHÔNG thêm bước trung gian mà HS KHÔNG viết. Ví dụ: HS viết "x²/2 = 18" rồi nhảy thẳng đến "x = ±6", bạn KHÔNG được chèn thêm "x² = 36" vì đó là bước HS bỏ qua.
+- Nếu HS thiếu bước quan trọng → nêu trong "loi_sai" của câu, KHÔNG tạo entry cham_tung_dong cho bước không tồn tại.
+- Không được dùng lại cùng 1 dong_index nhiều lần trong cùng câu.
+- Mọi entry không có dong_index hợp lệ sẽ bị backend LOẠI BỎ và bạn sẽ bị đánh dấu là hallucinating.
 
 B. VỀ CHẤM TIÊU CHÍ (quan trọng nhất cho tính điểm):
 - Với MỖI câu, bạn PHẢI trả về "diem_tieu_chi" có ĐÚNG ${(rubric.cac_cau || []).length > 0 ? 'số lượng và ĐÚNG thứ tự' : ''} tiêu chí như rubric trên.
@@ -236,24 +241,59 @@ Trả về JSON (không thêm text nào khác):
 
   const parsed = JSON.parse(jsonStr);
 
-  // ── LỚP BẢO VỆ CHÍNH: Ép dong = nội dung Gemini theo dong_index ─────────
+  // ── LỚP BẢO VỆ CHÍNH: STRICT — chỉ chấp nhận entry có dong_index hợp lệ ──
+  // Mọi entry Claude cố tình bịa (không có dong_index hoặc index sai) sẽ bị DROP.
+  // KHÔNG fuzzy-match — vì đó là kẽ hở để Claude chèn bước trung gian tự nghĩ ra.
+  const droppedByCau = new Map();    // so_cau → [entries bị drop]
   (parsed.cac_cau || []).forEach(cau => {
-    (cau.cham_tung_dong || []).forEach(d => {
-      const idx = typeof d.dong_index === 'number'
-        ? d.dong_index
-        : parseInt(d.dong_index);
+    const usedIdx = new Set();
+    const kept = [];
+    const dropped = [];
+    for (const d of (cau.cham_tung_dong || [])) {
+      const rawIdx = d.dong_index;
+      const idx = typeof rawIdx === 'number' ? rawIdx : parseInt(rawIdx);
 
-      if (!isNaN(idx) && indexedLines[idx]) {
-        // Luôn ghi đè bằng nội dung Gemini gốc — Claude không thể thay đổi
-        d.dong = indexedLines[idx].dong;
-      } else if (typeof d.dong === 'string' && d.dong.trim()) {
-        // Fallback: Claude lỡ tự viết nội dung → tìm dòng gốc gần nhất
-        d.dong = findClosestOriginalLine(d.dong, indexedLines) || d.dong;
-        console.warn(`[WARN] Claude không dùng dong_index. Câu: ${cau.so_cau}, dong: ${d.dong.substring(0, 30)}`);
+      if (isNaN(idx) || !indexedLines[idx]) {
+        dropped.push({ reason: 'missing_or_invalid_dong_index', data: { ...d } });
+        continue;
       }
+      if (usedIdx.has(idx)) {
+        // Claude dùng lại cùng 1 dòng 2 lần → có thể đang cố nhân bản
+        dropped.push({ reason: 'duplicate_dong_index', data: { ...d } });
+        continue;
+      }
+      usedIdx.add(idx);
+
+      // LUÔN ghi đè dong bằng OCR gốc — Claude không thể thay đổi nội dung
+      d.dong = indexedLines[idx].dong;
       delete d.dong_index;
-    });
+      kept.push(d);
+    }
+    cau.cham_tung_dong = kept;
+    if (dropped.length > 0) {
+      droppedByCau.set(cau.so_cau, dropped);
+      console.warn(`[STRICT] ${cau.so_cau}: đã drop ${dropped.length} entry Claude bịa:`,
+        dropped.map(x => `(${x.reason}) ${JSON.stringify(x.data).slice(0, 80)}`).join(' | '));
+    }
   });
+
+  // Gắn thông tin entries bị drop vào result để giáo viên/UI biết
+  if (droppedByCau.size > 0) {
+    parsed.canh_bao_hallucination = {
+      co_bia_dong: true,
+      so_cau_bi_bia: droppedByCau.size,
+      chi_tiet: Array.from(droppedByCau.entries()).map(([so_cau, dropped]) => ({
+        so_cau,
+        so_dong_bi_drop: dropped.length,
+        dong_bi_drop: dropped.map(x => ({
+          ly_do: x.reason,
+          dong_claude_bia: x.data.dong || '(không có)',
+          ghi_chu_claude: x.data.ghi_chu || ''
+        }))
+      })),
+      canh_bao_chung: `⚠️ Phát hiện Claude bịa ${Array.from(droppedByCau.values()).reduce((s,a)=>s+a.length,0)} dòng không có trong bài làm HS. Đã loại bỏ khỏi kết quả.`
+    };
+  }
 
   // ── Sanitize: xóa goi_y_sua, làm sạch nội dung ──────────────────────────
   sanitizeGradingResult(parsed);

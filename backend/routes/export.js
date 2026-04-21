@@ -320,7 +320,22 @@ function generateReportHTML(data) {
   // Cảnh báo integrity nếu có
   const integrityBanner = gradingResult.kiem_tra_toan_ven?.co_vi_pham
     ? `<div style="background:#fff3cd;border-left:4px solid #f0ad4e;padding:12px 16px;margin-bottom:16px;border-radius:6px;color:#856404;font-size:13px">
-         <strong>⚠️ Lưu ý:</strong> ${gradingResult.kiem_tra_toan_ven.canh_bao_chung}
+         <strong>⚠️ Lưu ý:</strong> ${htmlEscape(gradingResult.kiem_tra_toan_ven.canh_bao_chung)}
+       </div>`
+    : '';
+
+  // Cảnh báo Claude bịa dòng — quan trọng để giáo viên biết AI đã chèn bước giả
+  const hallucinationBanner = gradingResult.canh_bao_hallucination?.co_bia_dong
+    ? `<div style="background:#fdecea;border-left:4px solid #c0392b;padding:12px 16px;margin-bottom:16px;border-radius:6px;color:#7a1d13;font-size:13px">
+         <strong>🚨 Phát hiện AI bịa bước giải:</strong> ${htmlEscape(gradingResult.canh_bao_hallucination.canh_bao_chung)}
+         <details style="margin-top:6px"><summary style="cursor:pointer">Xem chi tiết</summary>
+         <ul style="margin:6px 0 0 16px">
+         ${gradingResult.canh_bao_hallucination.chi_tiet.map(c =>
+           `<li><strong>${htmlEscape(c.so_cau)}:</strong> ${c.dong_bi_drop.map(d =>
+             `<code style="background:#fff;padding:1px 4px;border-radius:3px">${htmlEscape(d.dong_claude_bia)}</code>`
+           ).join(', ')}</li>`
+         ).join('')}
+         </ul></details>
        </div>`
     : '';
 
@@ -333,6 +348,7 @@ function generateReportHTML(data) {
 .wrap{max-width:860px;margin:0 auto;padding:24px}.card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #eee}
 @media print{body{background:#fff}.no-print{display:none}}</style></head><body>
 <div class="wrap">
+  ${hallucinationBanner}
   ${integrityBanner}
   <div class="card" style="border-left:6px solid ${sc}">
     <div style="font-size:13px;color:#888">${subject} · ${new Date(createdAt).toLocaleString('vi-VN')}</div>

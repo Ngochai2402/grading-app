@@ -77,6 +77,29 @@ export default function ResultPage({ result, onBack }) {
         <a href={`${API}/api/export/${resultId}/html`} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ fontSize: 13 }}>🖨️ In HTML</a>
       </div>
 
+      {/* CẢNH BÁO HALLUCINATION */}
+      {gradingResult.canh_bao_hallucination?.co_bia_dong && (
+        <div className="card" style={{ background: "#fdecea", borderLeft: "4px solid #c0392b", color: "#7a1d13", marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>🚨 Phát hiện AI bịa bước giải</div>
+          <div style={{ fontSize: 13, lineHeight: 1.6 }}>{gradingResult.canh_bao_hallucination.canh_bao_chung}</div>
+          <details style={{ marginTop: 8 }}>
+            <summary style={{ cursor: "pointer", fontSize: 13 }}>Xem chi tiết các dòng bị drop</summary>
+            <ul style={{ marginTop: 6, paddingLeft: 20, fontSize: 13 }}>
+              {gradingResult.canh_bao_hallucination.chi_tiet.map((c, i) => (
+                <li key={i} style={{ marginBottom: 4 }}>
+                  <strong>{c.so_cau}:</strong>{" "}
+                  {c.dong_bi_drop.map((d, j) => (
+                    <code key={j} style={{ background: "#fff", padding: "1px 6px", borderRadius: 3, marginRight: 6 }}>
+                      {d.dong_claude_bia}
+                    </code>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      )}
+
       {/* ĐIỂM TỔNG */}
       <div className="card" style={{ display: "flex", alignItems: "center", gap: 24, background: scoreBg, border: `1.5px solid ${scoreColor}` }}>
         <div className="score-circle" style={{ background: scoreColor, color: "#fff", minWidth: 80 }}>
