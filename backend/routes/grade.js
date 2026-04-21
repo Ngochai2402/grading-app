@@ -43,7 +43,8 @@ function uploadMiddleware(req, res, next) {
 // ════════════════════════════════════════════════════════════════
 async function transcribeWithGemini(files, subject) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+  // Mặc định dùng gemini-1.5-flash (ổn định, quota cao). Override qua GEMINI_MODEL env.
+  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
   const model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: { temperature: 0, responseMimeType: 'application/json' }
@@ -109,17 +110,35 @@ Trả về JSON thuần (không markdown, không text phụ):
 }`;
 
   let text = '';
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // Retry với backoff cho cả 503/overload/fetch failed. Lần cuối fallback sang flash.
+  const isTransient = (err) => {
+    const msg = (err?.message || '') + '';
+    return /503|overloaded|unavailable|fetch failed|ECONNRESET|ETIMEDOUT|network|timeout/i.test(msg);
+  };
+
+  let currentModel = model;
+  let currentName = modelName;
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      const result = await model.generateContent([prompt, ...imageParts]);
+      const result = await currentModel.generateContent([prompt, ...imageParts]);
       text = result.response.text();
       break;
     } catch (err) {
-      if (attempt === 3) throw err;
-      const isOverload = err.message?.includes('503') || err.message?.includes('overloaded') || err.message?.includes('unavailable');
-      if (!isOverload) throw err;
-      console.log(`Gemini 503, thử lại lần ${attempt + 1}...`);
-      await new Promise(r => setTimeout(r, 3000 * attempt));
+      const transient = isTransient(err);
+      console.warn(`[Gemini] ${currentName} attempt ${attempt} failed: ${err.message}`);
+      if (attempt === 4) throw err;
+      if (!transient) throw err;
+
+      // Lần cuối cùng: thử fallback gemini-1.5-flash (nếu đang chạy model khác)
+      if (attempt === 3 && currentName !== 'gemini-1.5-flash') {
+        console.warn(`[Gemini] Fallback từ ${currentName} → gemini-1.5-flash`);
+        currentName = 'gemini-1.5-flash';
+        currentModel = genAI.getGenerativeModel({
+          model: currentName,
+          generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+        });
+      }
+      await new Promise(r => setTimeout(r, 2000 * attempt));
     }
   }
 
