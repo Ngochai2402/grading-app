@@ -295,6 +295,25 @@ function generateReportHTML(data) {
   const cauHTML = (cac_cau || []).map(cau => {
     const pct = cau.diem_toi_da > 0 ? cau.diem_dat / cau.diem_toi_da : 0;
     const c = pct >= 0.8 ? '#1b7a3e' : pct >= 0.4 ? '#e67e22' : '#c0392b';
+    // Highlight card nếu câu cần thầy xem
+    const cardBorder = cau.can_giao_vien_xem
+      ? 'border:2px solid #e67e22;box-shadow:0 0 0 3px #fef3dc'
+      : 'border:1px solid #eee';
+    const doTinCayPct = typeof cau.do_tin_cay === 'number' ? Math.round(cau.do_tin_cay * 100) : null;
+    const badgeReview = cau.can_giao_vien_xem
+      ? `<span style="background:#e67e22;color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px">⚠ Cần xem lại</span>`
+      : '';
+    const badgeConfidence = doTinCayPct !== null
+      ? `<span style="font-size:11px;color:${doTinCayPct >= 70 ? '#1b7a3e' : '#e67e22'};background:#fff;border:1px solid ${doTinCayPct >= 70 ? '#1b7a3e' : '#e67e22'};padding:2px 6px;border-radius:4px">Tin cậy ${doTinCayPct}%</span>`
+      : '';
+    const badgeAutoTach = cau.tieu_chi_auto_tach
+      ? `<span style="font-size:11px;color:#1565c0;background:#e3f2fd;padding:2px 6px;border-radius:4px">Tiêu chí AI tự tách</span>`
+      : '';
+    const lyDoBlock = (cau.can_giao_vien_xem && Array.isArray(cau.ly_do_can_xem) && cau.ly_do_can_xem.length > 0)
+      ? `<div style="padding:6px 16px;background:#fef3dc;font-size:12px;color:#8b5a1a;border-bottom:1px solid #f5d7a8">
+           <strong>Lý do:</strong> ${cau.ly_do_can_xem.map(r => htmlEscape(r)).join(' · ')}
+         </div>`
+      : '';
 
     const dongRows = (cau.cham_tung_dong || []).map(d => {
       const isDung = d.ket_qua?.includes('✓');
@@ -310,12 +329,16 @@ function generateReportHTML(data) {
       </tr>`;
     }).join('');
 
-    return `<div style="border:1px solid #eee;border-radius:10px;margin-bottom:16px;overflow:hidden">
-      <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:#fafafa;border-bottom:1px solid #eee">
+    return `<div style="${cardBorder};border-radius:10px;margin-bottom:16px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:#fafafa;border-bottom:1px solid #eee;flex-wrap:wrap">
         <span style="font-weight:700;font-size:15px">${htmlEscape(cau.so_cau)}</span>
         <span style="font-size:12px;color:#888">${htmlEscape(cau.trang_thai || '')}</span>
+        ${badgeReview}
+        ${badgeConfidence}
+        ${badgeAutoTach}
         <span style="font-weight:700;color:${c};font-size:18px;margin-left:auto">${cau.diem_dat}/${cau.diem_toi_da}đ</span>
       </div>
+      ${lyDoBlock}
       ${dongRows ? `<table style="width:100%;border-collapse:collapse">
         <thead>
           <tr style="background:#f5f5f5;font-size:12px;color:#555">
@@ -339,6 +362,13 @@ function generateReportHTML(data) {
        </div>`
     : '';
 
+  const reviewBanner = gradingResult.tom_tat_review?.so_cau_can_xem > 0
+    ? `<div style="background:#fef3dc;border-left:4px solid #e67e22;padding:12px 16px;margin-bottom:16px;border-radius:6px;color:#8b5a1a;font-size:13px">
+         <strong>⚠ Có ${gradingResult.tom_tat_review.so_cau_can_xem}/${gradingResult.tom_tat_review.tong_so_cau} câu cần giáo viên xem lại.</strong><br>
+         Lý do: ${gradingResult.tom_tat_review.ly_do_chinh.map(r => htmlEscape(r)).join(' · ')}
+       </div>`
+    : '';
+
   return `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8">
 <title>Kết quả - ${htmlEscape(studentName)}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -359,6 +389,7 @@ function generateReportHTML(data) {
 }</style></head><body>
 <div class="wrap">
   ${hallucinationBanner}
+  ${reviewBanner}
   <div class="card" style="border-left:6px solid ${sc}">
     <div style="font-size:13px;color:#888">${htmlEscape(subject)} · ${new Date(createdAt).toLocaleString('vi-VN')}</div>
     <div style="font-size:22px;font-weight:700;margin:6px 0">${htmlEscape(studentName)}</div>
@@ -572,6 +603,15 @@ function generateLatex(data) {
           ? '{\\color{colorYeu}\\textbf{Bỏ trống}}'
           : '{\\color{colorYeu}\\textbf{Sai}}';
 
+    // Badge độ tin cậy + cần xem
+    const doTinCayPct = typeof cau.do_tin_cay === 'number' ? Math.round(cau.do_tin_cay * 100) : null;
+    const badgeTinCay = doTinCayPct !== null
+      ? ` \\quad {\\small\\color{${doTinCayPct >= 70 ? 'colorGioi' : 'colorKha'}}(tin cậy ${doTinCayPct}\\%)}`
+      : '';
+    const warnReview = cau.can_giao_vien_xem
+      ? `\\noindent\\colorbox{bgWarn}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small \\textbf{[!] Cần giáo viên xem lại:} ${(cau.ly_do_can_xem || []).map(r => cellPlain(r)).join(' · ')}}}\\par\\vspace{4pt}`
+      : '';
+
     const chamList = Array.isArray(cau.cham_tung_dong) ? cau.cham_tung_dong : [];
     const dongRows = chamList.map(d => {
       const isDung = d.ket_qua?.includes('✓');
@@ -581,12 +621,9 @@ function generateLatex(data) {
       const ghiChuLatex = d.ghi_chu ? cellLatex(d.ghi_chu) : '~';
       const dongLatex = cellLatex(d.dong || '');
       const kqLabel = isDung ? 'Đúng' : isSai ? 'Sai' : '---';
-
-      // p{...} column đã cho phép line break; raggedright để tránh overfull
       return `${rowBg}\\raggedright ${dongLatex} & {${kqColor}\\textbf{${kqLabel}}} & \\raggedright ${ghiChuLatex} \\tabularnewline`;
     }).join('\n');
 
-    // Nếu không có dòng nào → skip longtable
     const chamBlock = chamList.length === 0
       ? `\\vspace{2pt}\\noindent{\\small\\itshape\\color{colorKha}(Không có bước giải nào được ghi nhận cho câu này)}`
       : `\\begin{longtable}{|>{\\raggedright\\arraybackslash}p{0.50\\textwidth}|>{\\centering\\arraybackslash}p{0.09\\textwidth}|>{\\raggedright\\arraybackslash}p{0.32\\textwidth}|}
@@ -603,9 +640,9 @@ ${dongRows}
 \\end{longtable}`;
 
     return `
-\\subsection*{\\color{${cc}}${cellPlain(cau.so_cau || '')} \\hfill ${diemDatNum}/${diemMaxNum}đ \\quad ${trangThai}}
+\\subsection*{\\color{${cc}}${cellPlain(cau.so_cau || '')} \\hfill ${diemDatNum}/${diemMaxNum}đ \\quad ${trangThai}${badgeTinCay}}
 \\vspace{-4pt}
-${chamBlock}
+${warnReview}${chamBlock}
 \\vspace{4pt}`;
   }).join('\n');
 
@@ -638,6 +675,7 @@ ${chamBlock}
 \\definecolor{bgDung}{HTML}{f0fff4}
 \\definecolor{bgSai}{HTML}{fff5f5}
 \\definecolor{bgChap}{HTML}{fffdf0}
+\\definecolor{bgWarn}{HTML}{fef3dc}
 \\definecolor{accentBar}{HTML}{${phan_tram >= 80 ? '1b7a3e' : phan_tram >= 60 ? 'c47f17' : 'c0392b'}}
 
 \\pagestyle{fancy}
@@ -665,6 +703,8 @@ ${chamBlock}
 \\end{center}
 
 \\vspace{12pt}
+
+${gradingResult.tom_tat_review?.so_cau_can_xem > 0 ? `\\noindent\\colorbox{bgWarn}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small \\textbf{[!] Có ${gradingResult.tom_tat_review.so_cau_can_xem}/${gradingResult.tom_tat_review.tong_so_cau} câu cần giáo viên xem lại.} Lý do: ${gradingResult.tom_tat_review.ly_do_chinh.map(r => cellPlain(r)).join(' · ')}}}\\par\\vspace{10pt}` : ''}
 
 \\section*{Chi tiết chấm từng dòng}
 
