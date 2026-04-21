@@ -1,0 +1,25 @@
+{
+  "name": "grading-app-backend",
+  "version": "3.0.0",
+  "description": "Backend chấm bài tự luận - phiên bản tối giản (chỉ đúng/sai, PDF LaTeX ổn định)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.60.0",
+    "@google/generative-ai": "^0.21.0",
+    "canvas": "^2.11.2",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mammoth": "^1.8.0",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^10.0.0",
+    "node-fetch": "^3.3.2",
+    "form-data": "^4.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
