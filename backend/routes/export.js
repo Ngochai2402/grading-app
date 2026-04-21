@@ -416,6 +416,21 @@ document.addEventListener("DOMContentLoaded", function() {
 </body></html>`;
 }
 
+// Debug: xem raw LaTeX source để truy vết lỗi compile
+router.get('/:id/latex', (req, res) => {
+  const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
+  if (!fs.existsSync(filePath)) return res.status(404).send('Không tìm thấy bài chấm');
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const latex = generateLatex(data);
+    const numbered = latex.split('\n').map((l, i) => `${String(i+1).padStart(4,' ')}| ${l}`).join('\n');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(numbered);
+  } catch (e) {
+    res.status(500).send('Lỗi sinh LaTeX: ' + e.message);
+  }
+});
+
 // ─── PDF export ───────────────────────────────────────────────────────────────
 // Ưu tiên LaTeX (chất lượng cao) nếu có LATEX_SERVICE_URL được cấu hình.
 // Khi LaTeX lỗi bất kỳ (network/compile/timeout) → auto fallback HTML auto-print
@@ -500,6 +515,25 @@ function scoreColor(pct) {
   return 'colorYeu';
 }
 
+// Loại bỏ emoji/glyph đặc biệt mà TeX Gyre Termes không có bold glyph cho.
+// Các ký tự như ✓ ✗ ◑ ○ 💡 ⚠️ 🚨 khi đặt trong \textbf{} gây xung đột font
+// → xelatex báo "Missing number, treated as zero". Thay bằng LaTeX symbol
+// hoặc text thuần để chắc chắn compile được.
+function stripEmojiForLatex(s) {
+  return String(s || '')
+    .replace(/✓/g, '$\\checkmark$')
+    .replace(/✗/g, '$\\times$')
+    .replace(/◑/g, '$\\circ$')
+    .replace(/○/g, '$\\circ$')
+    .replace(/💡/g, '')
+    .replace(/⚠️/g, '[!]')
+    .replace(/⚠/g, '[!]')
+    .replace(/🚨/g, '[!]')
+    // Xóa mọi emoji/pictograph còn lại (dải Unicode emoji)
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27BF}]/gu, '');
+}
+
 // ─── Sinh LaTeX source với hàm textToLatex MỚI (an toàn) ─────────────────────
 function generateLatex(data) {
   const { studentName, subject, gradingResult, createdAt } = data;
@@ -511,10 +545,11 @@ function generateLatex(data) {
     const diemMaxNum = Number(cau.diem_toi_da || 0);
     const pct2 = diemMaxNum > 0 ? (diemDatNum / diemMaxNum) * 100 : 0;
     const cc = scoreColor(pct2);
-    const trangThai = cau.trang_thai === 'Đúng' ? '{\\color{colorGioi}\\textbf{✓ Đúng}}' :
-                      cau.trang_thai === 'Một phần' || cau.trang_thai === 'Đúng một phần' ? '{\\color{colorKha}\\textbf{◑ Một phần}}' :
-                      cau.trang_thai === 'Bỏ trống' ? '{\\color{colorYeu}\\textbf{○ Bỏ trống}}' :
-                      '{\\color{colorYeu}\\textbf{✗ Sai}}';
+    // Tránh emoji trong \textbf{} — gây xung đột font bold
+    const trangThai = cau.trang_thai === 'Đúng' ? '{\\color{colorGioi}\\textbf{Đúng}}' :
+                      cau.trang_thai === 'Một phần' || cau.trang_thai === 'Đúng một phần' ? '{\\color{colorKha}\\textbf{Một phần}}' :
+                      cau.trang_thai === 'Bỏ trống' ? '{\\color{colorYeu}\\textbf{Bỏ trống}}' :
+                      '{\\color{colorYeu}\\textbf{Sai}}';
 
     const chamList = Array.isArray(cau.cham_tung_dong) ? cau.cham_tung_dong : [];
     const dongRows = chamList.map(d => {
@@ -523,17 +558,18 @@ function generateLatex(data) {
       const kqColor = isDung ? '\\color{colorGioi}' : isSai ? '\\color{colorYeu}' : '\\color{colorKha}';
       const rowBg = isDung ? '\\rowcolor{bgDung}' : isSai ? '\\rowcolor{bgSai}' : '\\rowcolor{bgChap}';
       const ghiChu = d.ghi_chu ? `\\footnotesize{${textToLatex(d.ghi_chu)}}` : '~';
-      const canhBaoLine = d.canh_bao ? ` {\\tiny\\color{colorKha}(${textToLatexPlain(d.canh_bao)})}` : '';
+      const canhBaoLine = d.canh_bao ? ` {\\tiny\\color{colorKha}(${textToLatexPlain(stripEmojiForLatex(d.canh_bao))})}` : '';
       const dongText = textToLatex(d.dong || '') || '~';
-      const kqText = textToLatexPlain(d.ket_qua || '') || '~';
-      return `${rowBg} ${dongText}${canhBaoLine} & {${kqColor}\\textbf{${kqText}}} & ${ghiChu} \\\\`;
+      // ket_qua dùng text thuần thay vì emoji
+      const kqLabel = isDung ? 'Đúng' : isSai ? 'Sai' : 'Chấp nhận';
+      return `${rowBg} ${dongText}${canhBaoLine} & {${kqColor}\\textbf{${kqLabel}}} & ${ghiChu} \\\\`;
     }).join('\n');
 
-    const loiSai = cau.loi_sai ? `\\vspace{2pt}\\noindent{\\color{colorYeu}\\small ✗ \\textbf{Lỗi:} ${textToLatex(cau.loi_sai)}}` : '';
+    const loiSai = cau.loi_sai ? `\\vspace{2pt}\\noindent{\\color{colorYeu}\\small \\textbf{Lỗi:} ${textToLatex(cau.loi_sai)}}` : '';
 
     // Nếu không có dòng nào (HS bỏ trống / Claude bịa hết đã bị drop) → skip longtable
     const chamBlock = chamList.length === 0
-      ? `\\vspace{2pt}\\noindent{\\small\\itshape\\color{colorKha}— Không có bước giải nào được ghi nhận cho câu này —}`
+      ? `\\vspace{2pt}\\noindent{\\small\\itshape\\color{colorKha}(Không có bước giải nào được ghi nhận cho câu này)}`
       : `\\begin{longtable}{p{0.42\\textwidth} p{0.13\\textwidth} p{0.38\\textwidth}}
 \\hline
 \\rowcolor{bgHeader} \\textbf{Bài làm học sinh} & \\textbf{Kết quả} & \\textbf{Nhận xét} \\\\
@@ -553,7 +589,7 @@ ${loiSai}
   // Banner cảnh báo integrity (nếu có AI sửa bài)
   const integrityWarning = gradingResult.kiem_tra_toan_ven?.co_vi_pham
     ? `\\vspace{6pt}
-\\noindent\\colorbox{bgWarn}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small \\textbf{⚠️ Lưu ý:} ${textToLatexPlain(gradingResult.kiem_tra_toan_ven.canh_bao_chung)}}}
+\\noindent\\colorbox{bgWarn}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small \\textbf{[!] Lưu ý:} ${textToLatexPlain(stripEmojiForLatex(gradingResult.kiem_tra_toan_ven.canh_bao_chung))}}}
 \\vspace{6pt}`
     : '';
 
@@ -605,14 +641,14 @@ ${loiSai}
   {\\LARGE\\textbf{${textToLatexPlain(studentName)}}}\\\\[12pt]
   {\\fontsize{56}{60}\\selectfont\\color{accentBar}\\textbf{${tong_diem}}}%
   {\\Large\\color{gray}/${diem_toi_da}}\\\\[4pt]
-  {\\large\\color{accentBar}\\textbf{${phan_tram}\\% · ${textToLatexPlain(xep_loai)}}}\\\\[10pt]
+  {\\large\\color{accentBar}\\textbf{${phan_tram}\\% -- ${textToLatexPlain(xep_loai)}}}\\\\[10pt]
   \\rule{\\textwidth}{0.5pt}
 \\end{center}
 
 ${integrityWarning}
 
 \\vspace{8pt}
-\\noindent\\colorbox{bgHeader}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small ${textToLatex(nhan_xet_chung || '')}}}
+\\noindent\\colorbox{bgHeader}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small ${textToLatex(stripEmojiForLatex(nhan_xet_chung || ''))}}}
 \\vspace{12pt}
 
 % ── CHI TIẾT ──────────────────────────────────────────────────────────────────
