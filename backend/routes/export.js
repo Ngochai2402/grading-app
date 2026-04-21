@@ -10,7 +10,7 @@ const { createCanvas, loadImage } = require('canvas');
 //   - Δ, x², x₁, √21 và các ký tự Unicode
 //   - Sanitize lệnh sai (\bet → \beta, \mathttt → \mathtt)
 //   - Escape an toàn ký tự đặc biệt LaTeX
-const { textToLatex, textToLatexPlain } = require('./latex-utils');
+const { textToLatex, textToLatexPlain, textToKatex } = require('./latex-utils');
 
 const router = express.Router();
 
@@ -249,37 +249,20 @@ async function createAllAnnotated(data, outputPath) {
   fs.writeFileSync(outputPath, canvas.toBuffer('image/png'));
 }
 
-// ─── Chuyển Unicode → HTML (giữ nguyên hàm cũ vì HTML không bị lỗi) ──────────
+// Escape HTML đơn giản — không đụng $, \, { vì KaTeX auto-render cần giữ nguyên
+function htmlEscape(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// Render text thành HTML an toàn cho KaTeX: wrap math bằng $...$, escape HTML.
+// Ưu tiên text đã được preprocess (có $...$); nếu chưa, tự tokenize qua textToKatex.
 function mathToHtml(text) {
   if (!text) return '';
-  const SUB = '₀₁₂₃₄₅₆₇₈₉';
-  let result = '';
-  let i = 0;
-  const tryKatex = (latex) => {
-    try { return `<span class="math">${latex}</span>`; }
-    catch { return latex; }
-  };
-  while (i < text.length) {
-    const ch = text[i];
-    const fracM = text.slice(i).match(/^(\d+)\/(\d+)/);
-    if (fracM) { result += tryKatex(`\\(\\dfrac{${fracM[1]}}{${fracM[2]}}\\)`); i += fracM[0].length; continue; }
-    if (/[a-zA-Z]/.test(ch) && i+1 < text.length && SUB.includes(text[i+1])) {
-      const sub = SUB.indexOf(text[i+1]);
-      result += tryKatex(`\\(${ch}_{${sub}}\\)`); i += 2; continue;
-    }
-    if (ch === '²') { result += tryKatex('\\(^2\\)'); i++; continue; }
-    if (ch === '³') { result += tryKatex('\\(^3\\)'); i++; continue; }
-    if (ch === '√') {
-      let num='', j=i+1;
-      while(j<text.length && /\d/.test(text[j])){num+=text[j];j++;}
-      result += tryKatex(`\\(\\sqrt{${num||''}}\\)`); i=j; continue;
-    }
-    const syms = {'Δ':'\\Delta','△':'\\triangle','≈':'\\approx','≤':'\\leq','≥':'\\geq','⟹':'\\Rightarrow','⇒':'\\Rightarrow','→':'\\to','≠':'\\neq','∈':'\\in','⊥':'\\perp','∥':'\\parallel','∽':'\\sim','·':'\\cdot','π':'\\pi'};
-    if (syms[ch]) { result += tryKatex(`\\(${syms[ch]}\\)`); i++; continue; }
-    result += ch.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    i++;
-  }
-  return result;
+  const converted = textToKatex(text);
+  return htmlEscape(converted);
 }
 
 function buildAnnotationLines(gradingResult, transcribed) {
@@ -309,22 +292,24 @@ function generateReportHTML(data) {
       const isSai = d.ket_qua?.includes('✗');
       const bg = isSai ? '#fff5f5' : isDung ? '#f5fff8' : '#fffdf0';
       const kqColor = isSai ? '#c0392b' : isDung ? '#1b7a3e' : '#c47f17';
-      const canhBao = d.canh_bao ? `<div style="background:#fff3cd;border-left:3px solid #f0ad4e;padding:4px 8px;margin-top:4px;font-size:11px;color:#856404">⚠️ ${d.canh_bao}</div>` : '';
+      const canhBao = d.canh_bao ? `<div style="background:#fff3cd;border-left:3px solid #f0ad4e;padding:4px 8px;margin-top:4px;font-size:11px;color:#856404">⚠️ ${htmlEscape(d.canh_bao)}</div>` : '';
+      const dongDisp = d.dong_katex || d.dong || '';
+      const ghiChuDisp = d.ghi_chu_katex || d.ghi_chu || '';
       return `<tr style="background:${bg}">
-        <td style="font-size:13px;padding:7px 12px;color:#222;line-height:1.6">${mathToHtml(d.dong || '')}${canhBao}</td>
-        <td style="font-weight:700;color:${kqColor};padding:5px 10px;white-space:nowrap">${d.ket_qua || ''}</td>
-        <td style="font-size:12px;color:${isSai?'#c62828':'#555'};padding:7px 12px;line-height:1.6">${mathToHtml(d.ghi_chu || '')}</td>
+        <td style="font-size:13px;padding:7px 12px;color:#222;line-height:1.6">${mathToHtml(dongDisp)}${canhBao}</td>
+        <td style="font-weight:700;color:${kqColor};padding:5px 10px;white-space:nowrap">${htmlEscape(d.ket_qua || '')}</td>
+        <td style="font-size:12px;color:${isSai?'#c62828':'#555'};padding:7px 12px;line-height:1.6">${mathToHtml(ghiChuDisp)}</td>
       </tr>`;
     }).join('');
 
+    const loiSaiDisp = cau.loi_sai_katex || cau.loi_sai || '';
     return `<div style="border:1px solid #eee;border-radius:10px;margin-bottom:16px;overflow:hidden">
       <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:#fafafa;border-bottom:1px solid #eee">
-        <span style="font-weight:700;font-size:15px">${cau.so_cau}</span>
+        <span style="font-weight:700;font-size:15px">${htmlEscape(cau.so_cau)}</span>
         <span style="font-weight:700;color:${c};font-size:18px;margin-left:auto">${cau.diem_dat}/${cau.diem_toi_da}đ</span>
       </div>
       ${dongRows ? `<table style="width:100%;border-collapse:collapse">${dongRows}</table>` : ''}
-      ${cau.loi_sai ? `<div style="padding:10px 16px;background:#fff5f5;color:#c0392b;font-size:13px">✗ ${cau.loi_sai}</div>` : ''}
-      ${cau.goi_y_sua ? `<div style="padding:10px 16px;background:#f0f7ff;color:#1a5ca8;font-size:13px">💡 ${cau.goi_y_sua}</div>` : ''}
+      ${loiSaiDisp ? `<div style="padding:10px 16px;background:#fff5f5;color:#c0392b;font-size:13px">✗ ${mathToHtml(loiSaiDisp)}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -335,7 +320,22 @@ function generateReportHTML(data) {
   // Cảnh báo integrity nếu có
   const integrityBanner = gradingResult.kiem_tra_toan_ven?.co_vi_pham
     ? `<div style="background:#fff3cd;border-left:4px solid #f0ad4e;padding:12px 16px;margin-bottom:16px;border-radius:6px;color:#856404;font-size:13px">
-         <strong>⚠️ Lưu ý:</strong> ${gradingResult.kiem_tra_toan_ven.canh_bao_chung}
+         <strong>⚠️ Lưu ý:</strong> ${htmlEscape(gradingResult.kiem_tra_toan_ven.canh_bao_chung)}
+       </div>`
+    : '';
+
+  // Cảnh báo Claude bịa dòng — quan trọng để giáo viên biết AI đã chèn bước giả
+  const hallucinationBanner = gradingResult.canh_bao_hallucination?.co_bia_dong
+    ? `<div style="background:#fdecea;border-left:4px solid #c0392b;padding:12px 16px;margin-bottom:16px;border-radius:6px;color:#7a1d13;font-size:13px">
+         <strong>🚨 Phát hiện AI bịa bước giải:</strong> ${htmlEscape(gradingResult.canh_bao_hallucination.canh_bao_chung)}
+         <details style="margin-top:6px"><summary style="cursor:pointer">Xem chi tiết</summary>
+         <ul style="margin:6px 0 0 16px">
+         ${gradingResult.canh_bao_hallucination.chi_tiet.map(c =>
+           `<li><strong>${htmlEscape(c.so_cau)}:</strong> ${c.dong_bi_drop.map(d =>
+             `<code style="background:#fff;padding:1px 4px;border-radius:3px">${htmlEscape(d.dong_claude_bia)}</code>`
+           ).join(', ')}</li>`
+         ).join('')}
+         </ul></details>
        </div>`
     : '';
 
@@ -346,15 +346,26 @@ function generateReportHTML(data) {
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',sans-serif;background:#f5f5f5;color:#222}
 .wrap{max-width:860px;margin:0 auto;padding:24px}.card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #eee}
-@media print{body{background:#fff}.no-print{display:none}}</style></head><body>
+@page{size:A4;margin:14mm}
+@media print{
+  body{background:#fff}
+  .no-print{display:none !important}
+  .wrap{max-width:100%;padding:0}
+  .card{box-shadow:none;page-break-inside:avoid;border:1px solid #ddd}
+  table{page-break-inside:auto}
+  tr{page-break-inside:avoid;page-break-after:auto}
+  img{max-width:100% !important;page-break-inside:avoid}
+  .katex{font-size:1em !important}
+}</style></head><body>
 <div class="wrap">
+  ${hallucinationBanner}
   ${integrityBanner}
   <div class="card" style="border-left:6px solid ${sc}">
     <div style="font-size:13px;color:#888">${subject} · ${new Date(createdAt).toLocaleString('vi-VN')}</div>
     <div style="font-size:22px;font-weight:700;margin:6px 0">${studentName}</div>
     <div style="font-size:52px;font-weight:700;color:${sc};line-height:1">${tong_diem}<span style="font-size:24px;color:#aaa">/${diem_toi_da}</span></div>
     <div style="font-size:18px;color:${sc};margin-top:4px">${phan_tram}% · ${xep_loai}</div>
-    ${nhan_xet_chung ? `<div style="margin-top:12px;padding:12px;background:#f8f8f8;border-radius:8px;font-size:14px;line-height:1.6">${nhan_xet_chung}</div>` : ''}
+    ${nhan_xet_chung ? `<div style="margin-top:12px;padding:12px;background:#f8f8f8;border-radius:8px;font-size:14px;line-height:1.6">${mathToHtml(gradingResult.nhan_xet_chung_katex || nhan_xet_chung)}</div>` : ''}
   </div>
   <div class="card"><h2 style="font-size:16px;font-weight:600;margin-bottom:14px">Chấm từng dòng</h2>${cauHTML}</div>
   ${images ? `<div class="card"><h2 style="font-size:16px;font-weight:600;margin-bottom:12px">Bài làm học sinh</h2>${images}</div>` : ''}
@@ -363,31 +374,104 @@ function generateReportHTML(data) {
   </div>
 </div>
 <script>
+// Chờ KaTeX load + ảnh tải xong rồi mới render + in → PDF sắc nét, không cắt math
+function whenReady(fn) {
+  var tries = 0;
+  (function check() {
+    if (typeof window.renderMathInElement === 'function') return fn();
+    if (tries++ > 60) return fn();
+    setTimeout(check, 100);
+  })();
+}
+function waitImages() {
+  var imgs = Array.from(document.images);
+  return Promise.all(imgs.map(function(img) {
+    if (img.complete) return Promise.resolve();
+    return new Promise(function(res) { img.addEventListener('load', res); img.addEventListener('error', res); });
+  }));
+}
 document.addEventListener("DOMContentLoaded", function() {
-  renderMathInElement(document.body, {
-    delimiters: [
-      {left:"\\\\(", right:"\\\\)", display:false},
-      {left:"\\\\[", right:"\\\\]", display:true}
-    ],
-    throwOnError: false
+  whenReady(function() {
+    try {
+      window.renderMathInElement(document.body, {
+        delimiters: [
+          {left:"$$", right:"$$", display:true},
+          {left:"$", right:"$", display:false},
+          {left:"\\\\(", right:"\\\\)", display:false},
+          {left:"\\\\[", right:"\\\\]", display:true}
+        ],
+        throwOnError: false,
+        strict: false
+      });
+    } catch(e) { console.warn('KaTeX error:', e); }
+
+    if (new URLSearchParams(location.search).get('print') === '1') {
+      waitImages().then(function() {
+        setTimeout(function(){ window.print(); }, 300);
+      });
+    }
   });
 });
 </script>
 </body></html>`;
 }
 
-// ─── PDF export qua Railway XeLaTeX service ──────────────────────────────────
+// Debug: xem raw LaTeX source để truy vết lỗi compile
+router.get('/:id/latex', (req, res) => {
+  const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
+  if (!fs.existsSync(filePath)) return res.status(404).send('Không tìm thấy bài chấm');
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const latex = generateLatex(data);
+    const numbered = latex.split('\n').map((l, i) => `${String(i+1).padStart(4,' ')}| ${l}`).join('\n');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(numbered);
+  } catch (e) {
+    res.status(500).send('Lỗi sinh LaTeX: ' + e.message);
+  }
+});
+
+// ─── PDF export ───────────────────────────────────────────────────────────────
+// Ưu tiên LaTeX (chất lượng cao) nếu có LATEX_SERVICE_URL được cấu hình.
+// Khi LaTeX lỗi bất kỳ (network/compile/timeout) → auto fallback HTML auto-print
+// để người dùng vẫn xuất được PDF từ trình duyệt.
+//
+// Query override:
+//   ?via=print  → ép dùng HTML print
+//   ?via=latex  → ép dùng LaTeX (hiện lỗi JSON nếu fail, dùng để debug)
+// Env:
+//   LATEX_SERVICE_URL — URL service xelatex (mặc định overlef-my)
+//   LATEX_DISABLED=1  — tắt hoàn toàn LaTeX, luôn HTML print
 router.get('/:id/pdf', async (req, res) => {
   const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Không tìm thấy' });
+  if (!fs.existsSync(filePath)) return res.status(404).send('Không tìm thấy bài chấm');
 
-  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  const latex = generateLatex(data);
+  const redirectToPrint = (reason) => {
+    if (reason) console.warn(`[PDF] → HTML print (${reason})`);
+    return res.redirect(`/api/export/${req.params.id}/html?print=1`);
+  };
+
+  const forcePrint = req.query.via === 'print';
+  const forceLatex = req.query.via === 'latex';
+  const latexDisabled = process.env.LATEX_DISABLED === '1';
+
+  if (forcePrint) return redirectToPrint('forced via=print');
+  if (latexDisabled && !forceLatex) return redirectToPrint('LATEX_DISABLED');
+
+  const LATEX_URL = process.env.LATEX_SERVICE_URL || 'https://overlef-my-production.up.railway.app/compile';
+
+  let data, latex;
+  try {
+    data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    latex = generateLatex(data);
+  } catch (e) {
+    console.error('[PDF] Lỗi khi sinh LaTeX source:', e.message);
+    if (forceLatex) return res.status(500).json({ error: 'Lỗi sinh LaTeX', detail: e.message });
+    return redirectToPrint(`generateLatex: ${e.message}`);
+  }
 
   try {
-    const LATEX_URL = process.env.LATEX_SERVICE_URL || 'https://overlef-my-production.up.railway.app/compile';
     const fetch = (await import('node-fetch')).default;
-
     const FormData = (await import('form-data')).default;
     const form = new FormData();
     form.append('content', latex);
@@ -402,23 +486,26 @@ router.get('/:id/pdf', async (req, res) => {
 
     if (!r.ok) {
       const errText = await r.text();
-      // Log latex source khi lỗi để debug
       console.error('═══ LATEX COMPILE ERROR ═══');
-      console.error('Student:', data.studentName);
-      console.error('Error:', errText.slice(0, 500));
-      console.error('LaTeX source (500 ký tự đầu):');
-      console.error(latex.slice(0, 500));
+      console.error('Student:', data.studentName, '· Result:', req.params.id);
+      console.error('Status:', r.status, '· Error:', errText.slice(0, 800));
+      console.error('── LaTeX source (1000 ký tự đầu) ──');
+      console.error(latex.slice(0, 1000));
       console.error('═══════════════════════════');
-      return res.status(500).json({ error: 'LaTeX compile error', detail: errText.slice(0, 500) });
+      if (forceLatex) {
+        return res.status(500).json({ error: 'LaTeX compile error', detail: errText.slice(0, 800) });
+      }
+      return redirectToPrint(`LaTeX service ${r.status}`);
     }
 
     const pdfBuffer = await r.buffer();
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="cham-bai-${req.params.id}.pdf"`);
-    res.send(pdfBuffer);
+    return res.send(pdfBuffer);
   } catch (error) {
-    console.error('Lỗi xuất PDF:', error);
-    res.status(500).json({ error: error.message });
+    console.error('[PDF] Lỗi gọi LaTeX service:', error.message);
+    if (forceLatex) return res.status(500).json({ error: 'LaTeX service unreachable', detail: error.message });
+    return redirectToPrint(error.message || 'unknown error');
   }
 });
 
@@ -428,6 +515,25 @@ function scoreColor(pct) {
   return 'colorYeu';
 }
 
+// Loại bỏ emoji/glyph đặc biệt mà TeX Gyre Termes không có bold glyph cho.
+// Các ký tự như ✓ ✗ ◑ ○ 💡 ⚠️ 🚨 khi đặt trong \textbf{} gây xung đột font
+// → xelatex báo "Missing number, treated as zero". Thay bằng LaTeX symbol
+// hoặc text thuần để chắc chắn compile được.
+function stripEmojiForLatex(s) {
+  return String(s || '')
+    .replace(/✓/g, '$\\checkmark$')
+    .replace(/✗/g, '$\\times$')
+    .replace(/◑/g, '$\\circ$')
+    .replace(/○/g, '$\\circ$')
+    .replace(/💡/g, '')
+    .replace(/⚠️/g, '[!]')
+    .replace(/⚠/g, '[!]')
+    .replace(/🚨/g, '[!]')
+    // Xóa mọi emoji/pictograph còn lại (dải Unicode emoji)
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27BF}]/gu, '');
+}
+
 // ─── Sinh LaTeX source với hàm textToLatex MỚI (an toàn) ─────────────────────
 function generateLatex(data) {
   const { studentName, subject, gradingResult, createdAt } = data;
@@ -435,37 +541,47 @@ function generateLatex(data) {
   const date = new Date(createdAt).toLocaleDateString('vi-VN');
 
   const cauBlocks = (cac_cau || []).map(cau => {
-    const pct2 = (cau.diem_dat / cau.diem_toi_da) * 100;
+    const diemDatNum = Number(cau.diem_dat || 0);
+    const diemMaxNum = Number(cau.diem_toi_da || 0);
+    const pct2 = diemMaxNum > 0 ? (diemDatNum / diemMaxNum) * 100 : 0;
     const cc = scoreColor(pct2);
-    const trangThai = cau.trang_thai === 'Đúng' ? '{\\color{colorGioi}\\textbf{✓ Đúng}}' :
-                      cau.trang_thai === 'Một phần' || cau.trang_thai === 'Đúng một phần' ? '{\\color{colorKha}\\textbf{◑ Một phần}}' :
-                      cau.trang_thai === 'Bỏ trống' ? '{\\color{colorYeu}\\textbf{○ Bỏ trống}}' :
-                      '{\\color{colorYeu}\\textbf{✗ Sai}}';
+    // Tránh emoji trong \textbf{} — gây xung đột font bold
+    const trangThai = cau.trang_thai === 'Đúng' ? '{\\color{colorGioi}\\textbf{Đúng}}' :
+                      cau.trang_thai === 'Một phần' || cau.trang_thai === 'Đúng một phần' ? '{\\color{colorKha}\\textbf{Một phần}}' :
+                      cau.trang_thai === 'Bỏ trống' ? '{\\color{colorYeu}\\textbf{Bỏ trống}}' :
+                      '{\\color{colorYeu}\\textbf{Sai}}';
 
-    const dongRows = (cau.cham_tung_dong || []).map(d => {
+    const chamList = Array.isArray(cau.cham_tung_dong) ? cau.cham_tung_dong : [];
+    const dongRows = chamList.map(d => {
       const isDung = d.ket_qua?.includes('✓');
       const isSai  = d.ket_qua?.includes('✗');
       const kqColor = isDung ? '\\color{colorGioi}' : isSai ? '\\color{colorYeu}' : '\\color{colorKha}';
       const rowBg = isDung ? '\\rowcolor{bgDung}' : isSai ? '\\rowcolor{bgSai}' : '\\rowcolor{bgChap}';
-      const ghiChu = d.ghi_chu ? `\\footnotesize{${textToLatex(d.ghi_chu)}}` : '';
-      // Cảnh báo nếu dòng bị AI sửa và đã khôi phục
-      const canhBaoLine = d.canh_bao ? ` {\\tiny\\color{colorKha}(${textToLatexPlain(d.canh_bao)})}` : '';
-      return `${rowBg} ${textToLatex(d.dong || '')}${canhBaoLine} & {${kqColor}\\textbf{${textToLatexPlain(d.ket_qua || '')}}} & ${ghiChu} \\\\`;
+      const ghiChu = d.ghi_chu ? `\\footnotesize{${textToLatex(d.ghi_chu)}}` : '~';
+      const canhBaoLine = d.canh_bao ? ` {\\tiny\\color{colorKha}(${textToLatexPlain(stripEmojiForLatex(d.canh_bao))})}` : '';
+      const dongText = textToLatex(d.dong || '') || '~';
+      // ket_qua dùng text thuần thay vì emoji
+      const kqLabel = isDung ? 'Đúng' : isSai ? 'Sai' : 'Chấp nhận';
+      return `${rowBg} ${dongText}${canhBaoLine} & {${kqColor}\\textbf{${kqLabel}}} & ${ghiChu} \\\\`;
     }).join('\n');
 
-    const loiSai = cau.loi_sai ? `\\vspace{2pt}\\noindent{\\color{colorYeu}\\small ✗ \\textbf{Lỗi:} ${textToLatex(cau.loi_sai)}}` : '';
-    const goiY   = cau.goi_y_sua ? `\\vspace{2pt}\\noindent{\\color{colorBlue}\\small 💡 ${textToLatex(cau.goi_y_sua)}}` : '';
+    const loiSai = cau.loi_sai ? `\\vspace{2pt}\\noindent{\\color{colorYeu}\\small \\textbf{Lỗi:} ${textToLatex(cau.loi_sai)}}` : '';
 
-    return `
-\\subsection*{\\color{${cc}}${textToLatexPlain(cau.so_cau)} \\hfill ${cau.diem_dat}/${cau.diem_toi_da}đ \\quad ${trangThai}}
-\\vspace{-4pt}
-\\begin{longtable}{p{0.42\\textwidth} p{0.13\\textwidth} p{0.38\\textwidth}}
+    // Nếu không có dòng nào (HS bỏ trống / Claude bịa hết đã bị drop) → skip longtable
+    const chamBlock = chamList.length === 0
+      ? `\\vspace{2pt}\\noindent{\\small\\itshape\\color{colorKha}(Không có bước giải nào được ghi nhận cho câu này)}`
+      : `\\begin{longtable}{p{0.42\\textwidth} p{0.13\\textwidth} p{0.38\\textwidth}}
 \\hline
 \\rowcolor{bgHeader} \\textbf{Bài làm học sinh} & \\textbf{Kết quả} & \\textbf{Nhận xét} \\\\
 \\hline
 ${dongRows}
 \\hline
-\\end{longtable}
+\\end{longtable}`;
+
+    return `
+\\subsection*{\\color{${cc}}${textToLatexPlain(cau.so_cau || '')} \\hfill ${diemDatNum}/${diemMaxNum}đ \\quad ${trangThai}}
+\\vspace{-4pt}
+${chamBlock}
 ${loiSai}
 \\vspace{4pt}`;
   }).join('\n');
@@ -473,7 +589,7 @@ ${loiSai}
   // Banner cảnh báo integrity (nếu có AI sửa bài)
   const integrityWarning = gradingResult.kiem_tra_toan_ven?.co_vi_pham
     ? `\\vspace{6pt}
-\\noindent\\colorbox{bgWarn}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small \\textbf{⚠️ Lưu ý:} ${textToLatexPlain(gradingResult.kiem_tra_toan_ven.canh_bao_chung)}}}
+\\noindent\\colorbox{bgWarn}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small \\textbf{[!] Lưu ý:} ${textToLatexPlain(stripEmojiForLatex(gradingResult.kiem_tra_toan_ven.canh_bao_chung))}}}
 \\vspace{6pt}`
     : '';
 
@@ -525,14 +641,14 @@ ${loiSai}
   {\\LARGE\\textbf{${textToLatexPlain(studentName)}}}\\\\[12pt]
   {\\fontsize{56}{60}\\selectfont\\color{accentBar}\\textbf{${tong_diem}}}%
   {\\Large\\color{gray}/${diem_toi_da}}\\\\[4pt]
-  {\\large\\color{accentBar}\\textbf{${phan_tram}\\% · ${textToLatexPlain(xep_loai)}}}\\\\[10pt]
+  {\\large\\color{accentBar}\\textbf{${phan_tram}\\% -- ${textToLatexPlain(xep_loai)}}}\\\\[10pt]
   \\rule{\\textwidth}{0.5pt}
 \\end{center}
 
 ${integrityWarning}
 
 \\vspace{8pt}
-\\noindent\\colorbox{bgHeader}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small ${textToLatex(nhan_xet_chung || '')}}}
+\\noindent\\colorbox{bgHeader}{\\parbox{\\dimexpr\\textwidth-2\\fboxsep}{\\small ${textToLatex(stripEmojiForLatex(nhan_xet_chung || ''))}}}
 \\vspace{12pt}
 
 % ── CHI TIẾT ──────────────────────────────────────────────────────────────────

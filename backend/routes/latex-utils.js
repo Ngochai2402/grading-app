@@ -429,9 +429,115 @@ function textToLatexPlain(text) {
   return escapeTextMode(text || '');
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// textToKatex(text)
+//
+// Mục đích: Tiền xử lý cho KaTeX (HTML / frontend React).
+// Input:  text thô có Unicode math (vd: "Δ = b² - 4ac, x₁ = -2")
+// Output: text đã wrap math bằng $...$ và đổi Unicode → LaTeX command.
+//         Giữ nguyên chữ Việt, KHÔNG escape \ (vì output là cho KaTeX text-mode, không phải LaTeX compiler).
+//
+// Khác với textToLatex:
+//   - textToLatex: đầu ra cho XeLaTeX compiler (escape \, &, %, #, _...)
+//   - textToKatex: đầu ra cho KaTeX auto-render (chỉ cần $...$ markers)
+// ─────────────────────────────────────────────────────────────────────────────
+function textToKatex(text) {
+  if (!text) return '';
+
+  // Nếu đã có $...$ hoặc \(...\) thì giữ nguyên — tin là người viết đã format sẵn
+  const segments = splitByMathMode(text);
+  if (segments.some(s => s.type === 'math')) {
+    // Xử lý math bên trong delimiters (đổi Unicode → LaTeX, sanitize command sai)
+    return segments.map(seg => {
+      if (seg.type === 'math') {
+        return '$' + processMathSegment(seg.content) + '$';
+      }
+      // Text bên ngoài: nếu có ký tự math Unicode lẻ → wrap thêm
+      return wrapUnicodeMath(seg.content);
+    }).join('');
+  }
+
+  // Không có markers → tự tokenize
+  return wrapUnicodeMath(text);
+}
+
+// Tokenize text thuần: phát hiện vùng math (Unicode math + biến/số/toán tử liền kề)
+// và wrap $...$. Giữ nguyên chữ Việt.
+function wrapUnicodeMath(content) {
+  if (!content) return '';
+  if (!hasMathContent(content)) return content;
+
+  const MATH_CHAR = /[ΔΣΠΘΛΦΨΩαβγδεζηθλμνπρστφχψω²³⁰-⁹₀-₉√∑∏∫∞≈≠≤≥∈∉⊂⊆∪∩⇒⇔→←↔±×÷·∠⊥∥∽△]/;
+  const MATH_CONTINUE = /[a-zA-Z0-9+\-*/=().,^_!]/;
+  const MATH_STOP = /[\s;:"'`]/;
+
+  const parts = [];
+  let current = '';
+  let currentType = null;
+
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
+    const isMath = MATH_CHAR.test(ch);
+    const isMathContinue = MATH_CONTINUE.test(ch);
+    const isMathStop = MATH_STOP.test(ch);
+
+    if (isMath) {
+      if (currentType === 'text') {
+        // Gom ngược các biến/số liền kề vào math
+        let back = 0;
+        while (current.length - back > 0 && MATH_CONTINUE.test(current[current.length - 1 - back])) {
+          back++;
+        }
+        if (back > 0) {
+          const mathPart = current.slice(-back);
+          current = current.slice(0, -back);
+          if (current) parts.push({ type: 'text', content: current });
+          current = mathPart + ch;
+        } else {
+          if (current) parts.push({ type: 'text', content: current });
+          current = ch;
+        }
+        currentType = 'math';
+      } else {
+        current = (current || '') + ch;
+        currentType = 'math';
+      }
+    } else if (isMathStop) {
+      if (currentType === 'math') {
+        parts.push({ type: 'math', content: current });
+        current = ch;
+        currentType = 'text';
+      } else {
+        current = (current || '') + ch;
+        currentType = currentType || 'text';
+      }
+    } else if (currentType === 'math' && isMathContinue) {
+      current += ch;
+    } else {
+      if (currentType === 'math') {
+        parts.push({ type: 'math', content: current });
+        current = ch;
+        currentType = 'text';
+      } else {
+        current = (current || '') + ch;
+        currentType = 'text';
+      }
+    }
+  }
+  if (current) parts.push({ type: currentType || 'text', content: current });
+
+  return parts.map(p => {
+    if (p.type === 'math') {
+      return '$' + processMathSegment(p.content) + '$';
+    }
+    return p.content;  // giữ nguyên, không escape
+  }).join('');
+}
+
 module.exports = {
   textToLatex,
   textToLatexPlain,
+  textToKatex,
   // Export helpers for testing
   _internals: {
     unicodeToMathMode,
@@ -439,6 +545,7 @@ module.exports = {
     escapeTextMode,
     splitByMathMode,
     hasMathContent,
-    processTextSegment
+    processTextSegment,
+    wrapUnicodeMath
   }
 };

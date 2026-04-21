@@ -77,6 +77,29 @@ export default function ResultPage({ result, onBack }) {
         <a href={`${API}/api/export/${resultId}/html`} target="_blank" rel="noreferrer" className="btn btn-outline" style={{ fontSize: 13 }}>🖨️ In HTML</a>
       </div>
 
+      {/* CẢNH BÁO HALLUCINATION */}
+      {gradingResult.canh_bao_hallucination?.co_bia_dong && (
+        <div className="card" style={{ background: "#fdecea", borderLeft: "4px solid #c0392b", color: "#7a1d13", marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>🚨 Phát hiện AI bịa bước giải</div>
+          <div style={{ fontSize: 13, lineHeight: 1.6 }}>{gradingResult.canh_bao_hallucination.canh_bao_chung}</div>
+          <details style={{ marginTop: 8 }}>
+            <summary style={{ cursor: "pointer", fontSize: 13 }}>Xem chi tiết các dòng bị drop</summary>
+            <ul style={{ marginTop: 6, paddingLeft: 20, fontSize: 13 }}>
+              {gradingResult.canh_bao_hallucination.chi_tiet.map((c, i) => (
+                <li key={i} style={{ marginBottom: 4 }}>
+                  <strong>{c.so_cau}:</strong>{" "}
+                  {c.dong_bi_drop.map((d, j) => (
+                    <code key={j} style={{ background: "#fff", padding: "1px 6px", borderRadius: 3, marginRight: 6 }}>
+                      {d.dong_claude_bia}
+                    </code>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      )}
+
       {/* ĐIỂM TỔNG */}
       <div className="card" style={{ display: "flex", alignItems: "center", gap: 24, background: scoreBg, border: `1.5px solid ${scoreColor}` }}>
         <div className="score-circle" style={{ background: scoreColor, color: "#fff", minWidth: 80 }}>
@@ -89,7 +112,7 @@ export default function ResultPage({ result, onBack }) {
             <span style={{ fontWeight: 700, fontSize: 16, color: scoreColor }}>{xep_loai}</span>
           </div>
           <p style={{ fontSize: 14, lineHeight: 1.7, color: "var(--text)" }}>
-            <MathText text={nhan_xet_chung} />
+            <MathText text={gradingResult.nhan_xet_chung_katex || nhan_xet_chung} />
           </p>
         </div>
       </div>
@@ -129,7 +152,12 @@ export default function ResultPage({ result, onBack }) {
                         return (
                           <tr key={j} style={{ background: bg, borderTop: j > 0 ? "1px solid var(--border)" : "none" }}>
                             <td style={{ padding: "10px 14px", fontSize: 13.5, lineHeight: 1.8, verticalAlign: "middle", wordBreak: "break-word" }}>
-                              <MathText text={dong.dong} />
+                              <MathText text={dong.dong_katex || dong.dong} />
+                              {dong.ghi_chu && (
+                                <div style={{ marginTop: 4, fontSize: 12, color: "#c62828", lineHeight: 1.6 }}>
+                                  → <MathText text={dong.ghi_chu_katex || dong.ghi_chu} />
+                                </div>
+                              )}
                             </td>
                             <td style={{ padding: "10px 12px", fontWeight: 700, color: kqColor, fontSize: 13, verticalAlign: "middle", whiteSpace: "nowrap" }}>
                               {dong.ket_qua}
@@ -144,7 +172,7 @@ export default function ResultPage({ result, onBack }) {
                 {/* Lỗi + Gợi ý */}
                 {cau.loi_sai && (
                   <div style={{ padding: "10px 16px", background: "#fff5f5", fontSize: 13, color: "#c62828", borderTop: "1px solid #fdd", lineHeight: 1.7 }}>
-                    ✗ <strong>Lỗi:</strong> <MathText text={cau.loi_sai} />
+                    ✗ <strong>Lỗi:</strong> <MathText text={cau.loi_sai_katex || cau.loi_sai} />
                   </div>
                 )}
                 {cau.goi_y_sua && (

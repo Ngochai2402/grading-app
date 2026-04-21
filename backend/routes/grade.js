@@ -5,6 +5,8 @@ const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { v4: uuidv4 } = require('uuid');
+const { verifyIntegrity } = require('./verify');
+const { textToKatex } = require('./latex-utils');
 
 const router = express.Router();
 
@@ -41,7 +43,11 @@ function uploadMiddleware(req, res, next) {
 // ════════════════════════════════════════════════════════════════
 async function transcribeWithGemini(files, subject) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+  });
 
   const imageParts = files.map(file => ({
     inlineData: {
@@ -52,23 +58,44 @@ async function transcribeWithGemini(files, subject) {
 
   const prompt = `Bạn là MÁY QUÉT bài thi môn ${subject}. Bạn KHÔNG phải giáo viên. Bạn KHÔNG biết tính toán.
 
-NHIỆM VỤ DUY NHẤT: Chép lại đúng y hệt từng dòng chữ trong ảnh. Không hơn không kém.
+NHIỆM VỤ DUY NHẤT: Chép lại CHÍNH XÁC TỪNG KÝ TỰ học sinh viết trên ảnh. Không thêm bớt, không diễn giải.
 
 TUYỆT ĐỐI CẤM:
-1. CẤM sửa phép tính, dù học sinh viết sai. Ví dụ: "delta = 20" thì chỉ ghi "delta = 20", KHÔNG đổi thành giá trị khác.
-2. CẤM thêm chú thích "(sai)", "(đúng)", "(học sinh ghi...)", "[thực ra là...]" hay bất cứ thứ gì thêm vào.
-3. CẤM đoán khi không đọc được — ghi [?].
-4. CẤM bỏ qua bất kỳ dòng nào, kể cả dòng bị gạch xóa.
+1. CẤM sửa phép tính dù học sinh viết sai. Ví dụ HS viết "Δ = 20" thì CHỈ ghi "Δ = 20". KHÔNG bao giờ đổi thành giá trị bạn tự tính.
+2. CẤM thêm chú thích "(sai)", "(đúng)", "(HS viết...)", "[thực ra...]".
+3. Nếu không đọc rõ ký tự → ghi [?] ngay tại vị trí đó. KHÔNG đoán.
+4. CẤM bỏ qua dòng nào, kể cả dòng gạch xóa — ghi dòng gạch xóa nguyên văn.
+5. CẤM gộp 2 dòng thành 1. Học sinh xuống dòng ở đâu, bạn xuống dòng ở đó.
 
-QUY TẮC:
-- Ký hiệu phân số: chép đúng tử/mẫu (vd: 7/2).
-- Chỉ số trên/dưới: x², x₁.
-- Hình vẽ: mô tả ngắn trong [], vd [Đồ thị parabol].
-- Nhiều ảnh: phân biệt [Trang 1], [Trang 2]...
-- Giữ nguyên xuống dòng như trong ảnh.
+QUY TẮC VIẾT CÔNG THỨC TOÁN (ưu tiên LaTeX trong $...$ để tránh nhập nhằng):
+- Phân số a/b nằm dọc: $\\dfrac{a}{b}$. Phân số ngang viết tay: a/b.
+- Lũy thừa: $x^2$, $x^{10}$, $a^{n+1}$.
+- Chỉ số dưới: $x_1$, $a_{ij}$.
+- Căn: $\\sqrt{21}$, $\\sqrt[3]{8}$.
+- Chữ Hy Lạp: $\\Delta$, $\\alpha$, $\\pi$, $\\theta$ (không dùng Δ Unicode vì dễ nhầm △ tam giác).
+- Tam giác: $\\triangle ABC$.
+- Ngoặc đa cấp: $\\left(\\frac{a+b}{c}\\right)$.
+- Mũi tên: $\\Rightarrow$, $\\Leftrightarrow$.
+- Dấu so sánh: $\\leq$, $\\geq$, $\\neq$, $\\approx$.
+- Các ký hiệu bình thường (+, -, =, <, >) có thể viết thẳng không cần $...$.
 
-Trả về JSON (không thêm text nào khác):
-\`\`\`json
+VÍ DỤ TỐT:
+- HS viết "x² + 2x + 1" → ghi "$x^2 + 2x + 1$" hoặc "x² + 2x + 1" (cả hai đều chấp nhận, nhưng LaTeX được ưu tiên).
+- HS viết "Δ = b² - 4ac" → ghi "$\\Delta = b^2 - 4ac$".
+- HS viết phân số 3/4 → ghi "$\\dfrac{3}{4}$".
+- HS viết "√25 = 5" → ghi "$\\sqrt{25} = 5$".
+
+QUY TẮC PHÂN CÂU:
+- Mỗi câu (Câu 1, Câu 2, Bài 1a, …) là 1 phần tử trong "cac_cau".
+- "so_cau" = đúng chuỗi học sinh viết: "Câu 1", "Câu 2a", "Bài 3", …
+- "noi_dung_goc" = mảng các dòng, mỗi phần tử là 1 dòng HS viết.
+- Nếu nhiều ảnh: ghi "[Trang 1]", "[Trang 2]" ở đầu noi_dung_goc của mỗi trang.
+
+KIỂM TRA TRƯỚC KHI TRẢ LỜI:
+- Đếm số câu trong ảnh → số phần tử cac_cau phải khớp.
+- Mọi con số, ký tự bạn viết có KHỚP CHÍNH XÁC với ảnh không? Nếu không chắc → dùng [?].
+
+Trả về JSON thuần (không markdown, không text phụ):
 {
   "cac_cau": [
     {
@@ -79,8 +106,7 @@ Trả về JSON (không thêm text nào khác):
       ]
     }
   ]
-}
-\`\`\``;
+}`;
 
   let text = '';
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -123,50 +149,77 @@ async function gradeWithClaude(transcribed, rubric, studentName, subject) {
     .map((item, idx) => `[${idx}] (${item.cau}) ${item.dong}`)
     .join('\n');
 
-  const prompt = `Bạn là giáo viên ${subject} chuyên nghiệp. Chấm bài học sinh ${studentName}.
+  // Build rubric dạng rõ ràng: liệt kê tiêu chí có ID để Claude tham chiếu
+  const rubricSpec = (rubric.cac_cau || []).map(cau => {
+    const tcList = (cau.tieu_chi || []).map((tc, idx) =>
+      `    [TC${idx}] "${tc.mo_ta}" — ${tc.diem} điểm`
+    ).join('\n');
+    return `• ${cau.so_cau} (tối đa ${cau.diem}đ):
+  Đề: ${cau.noi_dung || '(không có)'}
+  Đáp án chuẩn: ${cau.dap_an || '(không có)'}
+  Tiêu chí chấm:
+${tcList}`;
+  }).join('\n\n');
 
-=== BÀI LÀM (mỗi dòng có INDEX ở đầu) ===
-${indexedText}
+  const rubricCauList = (rubric.cac_cau || []).map(c => c.so_cau).join(', ');
+
+  const prompt = `Bạn là giáo viên ${subject} chuyên nghiệp, chấm nghiêm túc. Học sinh: ${studentName}.
+
+=== BÀI LÀM HỌC SINH (mỗi dòng có INDEX [n] ở đầu) ===
+${indexedText || '(Học sinh không viết gì)'}
 
 === RUBRIC CHÍNH THỨC ===
-${JSON.stringify(rubric, null, 2)}
+${rubricSpec}
+
+Tổng điểm tối đa: ${rubric.tong_diem}
+Số câu phải chấm: ${(rubric.cac_cau || []).length} — ${rubricCauList}
 
 === NGUYÊN TẮC CHẤM — BẮT BUỘC ===
 
-QUAN TRỌNG NHẤT — Trường "dong_index":
-- "dong_index" là SỐ INDEX của dòng (số trong []).
-- TUYỆT ĐỐI KHÔNG viết lại nội dung dòng đó. Chỉ điền số index.
-- Ví dụ: dòng [3] thì "dong_index": 3. Không ghi thêm gì khác.
+A. VỀ THAM CHIẾU DÒNG — TUYỆT ĐỐI CẤM BỊA:
+- "dong_index" là SỐ NGUYÊN trong [] ở đầu mỗi dòng bài làm.
+- MỖI entry trong "cham_tung_dong" PHẢI có "dong_index" khớp với 1 dòng CÓ THẬT trong bài làm (từ [0] đến [${Math.max(indexedLines.length - 1, 0)}]).
+- TUYỆT ĐỐI KHÔNG viết lại, sửa, hoặc tóm tắt nội dung dòng. Chỉ điền số.
+- TUYỆT ĐỐI KHÔNG thêm bước trung gian mà HS KHÔNG viết. Ví dụ: HS viết "x²/2 = 18" rồi nhảy thẳng đến "x = ±6", bạn KHÔNG được chèn thêm "x² = 36" vì đó là bước HS bỏ qua.
+- Nếu HS thiếu bước quan trọng → nêu trong "loi_sai" của câu, KHÔNG tạo entry cham_tung_dong cho bước không tồn tại.
+- Không được dùng lại cùng 1 dong_index nhiều lần trong cùng câu.
+- Mọi entry không có dong_index hợp lệ sẽ bị backend LOẠI BỎ và bạn sẽ bị đánh dấu là hallucinating.
 
-Các nguyên tắc chấm:
-1. "ket_qua" = chỉ "✓ Đúng" hoặc "✗ Sai". Không dùng giá trị khác.
-2. "ghi_chu" = nếu sai: chỉ ra sai ở bước nào (tối đa 1 câu). Nếu đúng: để "".
-3. Chỉ cho điểm những gì HS THỰC SỰ viết — không suy diễn bước trung gian.
-4. Cách làm khác vẫn được điểm nếu đúng toán VÀ đáp ứng tiêu chí rubric.
-5. Nếu HS bỏ trống: diem_dat = 0, cham_tung_dong = [].
-6. "loi_sai": 1 câu mô tả lỗi chính. Để "" nếu đúng. KHÔNG viết cách sửa.
-7. KHÔNG tạo trường "goi_y_sua". KHÔNG viết hướng dẫn sửa ở bất cứ đâu.
-8. "nhan_xet_chung": nhận xét tổng quát. KHÔNG hướng dẫn sửa bài.
+B. VỀ CHẤM TIÊU CHÍ (quan trọng nhất cho tính điểm):
+- Với MỖI câu, bạn PHẢI trả về "diem_tieu_chi" có ĐÚNG ${(rubric.cac_cau || []).length > 0 ? 'số lượng và ĐÚNG thứ tự' : ''} tiêu chí như rubric trên.
+- Nếu rubric câu có 3 tiêu chí [TC0], [TC1], [TC2] → bạn phải trả về mảng 3 phần tử theo đúng thứ tự đó.
+- Mỗi phần tử: { "tieu_chi_index": <số TC>, "tieu_chi": "<copy nguyên văn mo_ta>", "dat": true|false }
+- "dat" = true CHỈ KHI học sinh thực sự đáp ứng tiêu chí đó. Nếu không rõ ràng → false.
+- KHÔNG tự cộng điểm. Backend sẽ tính điểm từ rubric dựa trên "dat".
+
+C. VỀ NỘI DUNG CHẤM:
+1. "ket_qua" chỉ: "✓ Đúng" hoặc "✗ Sai".
+2. "ghi_chu": nếu sai thì chỉ ra sai ở đâu (≤1 câu). Nếu đúng để "".
+3. Chỉ chấm đúng những gì HS THỰC SỰ viết — KHÔNG suy diễn bước trung gian.
+4. Cách giải khác vẫn được điểm nếu đúng toán học VÀ đạt tiêu chí rubric.
+5. Nếu HS bỏ trống câu: "diem_tieu_chi" vẫn phải đủ, tất cả dat=false; "cham_tung_dong"=[]; "trang_thai"="Bỏ trống".
+6. "loi_sai": 1 câu mô tả lỗi chính (không hướng dẫn sửa). Để "" nếu đúng.
+7. CẤM tạo "goi_y_sua" hoặc viết hướng dẫn sửa bài.
+8. "nhan_xet_chung": nhận xét tổng quát ngắn. KHÔNG hướng dẫn sửa.
+9. "trang_thai" ∈ { "Đúng", "Đúng một phần", "Sai", "Bỏ trống" }.
+
+D. VỀ ĐẦY ĐỦ:
+- PHẢI chấm đủ ${(rubric.cac_cau || []).length} câu, đúng tên: ${rubricCauList}.
+- Nếu không tìm thấy dòng nào của câu → vẫn trả về entry câu đó với cham_tung_dong=[], trang_thai="Bỏ trống".
 
 Trả về JSON (không thêm text nào khác):
 \`\`\`json
 {
-  "tong_diem": 0,
-  "diem_toi_da": 0,
-  "phan_tram": 0,
-  "xep_loai": "Yếu",
-  "nhan_xet_chung": "nhận xét ngắn, không hướng dẫn sửa",
+  "nhan_xet_chung": "nhận xét ngắn",
   "cac_cau": [
     {
       "so_cau": "Câu 1",
-      "diem_dat": 0,
-      "diem_toi_da": 0,
       "trang_thai": "Sai",
       "cham_tung_dong": [
         { "dong_index": 0, "ket_qua": "✗ Sai", "ghi_chu": "sai ở bước nào" }
       ],
       "diem_tieu_chi": [
-        { "tieu_chi": "tên tiêu chí", "dat": false, "diem": 0 }
+        { "tieu_chi_index": 0, "tieu_chi": "copy mo_ta từ rubric", "dat": false }
       ],
       "loi_sai": "mô tả lỗi, không hướng dẫn sửa"
     }
@@ -188,24 +241,59 @@ Trả về JSON (không thêm text nào khác):
 
   const parsed = JSON.parse(jsonStr);
 
-  // ── LỚP BẢO VỆ CHÍNH: Ép dong = nội dung Gemini theo dong_index ─────────
+  // ── LỚP BẢO VỆ CHÍNH: STRICT — chỉ chấp nhận entry có dong_index hợp lệ ──
+  // Mọi entry Claude cố tình bịa (không có dong_index hoặc index sai) sẽ bị DROP.
+  // KHÔNG fuzzy-match — vì đó là kẽ hở để Claude chèn bước trung gian tự nghĩ ra.
+  const droppedByCau = new Map();    // so_cau → [entries bị drop]
   (parsed.cac_cau || []).forEach(cau => {
-    (cau.cham_tung_dong || []).forEach(d => {
-      const idx = typeof d.dong_index === 'number'
-        ? d.dong_index
-        : parseInt(d.dong_index);
+    const usedIdx = new Set();
+    const kept = [];
+    const dropped = [];
+    for (const d of (cau.cham_tung_dong || [])) {
+      const rawIdx = d.dong_index;
+      const idx = typeof rawIdx === 'number' ? rawIdx : parseInt(rawIdx);
 
-      if (!isNaN(idx) && indexedLines[idx]) {
-        // Luôn ghi đè bằng nội dung Gemini gốc — Claude không thể thay đổi
-        d.dong = indexedLines[idx].dong;
-      } else if (typeof d.dong === 'string' && d.dong.trim()) {
-        // Fallback: Claude lỡ tự viết nội dung → tìm dòng gốc gần nhất
-        d.dong = findClosestOriginalLine(d.dong, indexedLines) || d.dong;
-        console.warn(`[WARN] Claude không dùng dong_index. Câu: ${cau.so_cau}, dong: ${d.dong.substring(0, 30)}`);
+      if (isNaN(idx) || !indexedLines[idx]) {
+        dropped.push({ reason: 'missing_or_invalid_dong_index', data: { ...d } });
+        continue;
       }
+      if (usedIdx.has(idx)) {
+        // Claude dùng lại cùng 1 dòng 2 lần → có thể đang cố nhân bản
+        dropped.push({ reason: 'duplicate_dong_index', data: { ...d } });
+        continue;
+      }
+      usedIdx.add(idx);
+
+      // LUÔN ghi đè dong bằng OCR gốc — Claude không thể thay đổi nội dung
+      d.dong = indexedLines[idx].dong;
       delete d.dong_index;
-    });
+      kept.push(d);
+    }
+    cau.cham_tung_dong = kept;
+    if (dropped.length > 0) {
+      droppedByCau.set(cau.so_cau, dropped);
+      console.warn(`[STRICT] ${cau.so_cau}: đã drop ${dropped.length} entry Claude bịa:`,
+        dropped.map(x => `(${x.reason}) ${JSON.stringify(x.data).slice(0, 80)}`).join(' | '));
+    }
   });
+
+  // Gắn thông tin entries bị drop vào result để giáo viên/UI biết
+  if (droppedByCau.size > 0) {
+    parsed.canh_bao_hallucination = {
+      co_bia_dong: true,
+      so_cau_bi_bia: droppedByCau.size,
+      chi_tiet: Array.from(droppedByCau.entries()).map(([so_cau, dropped]) => ({
+        so_cau,
+        so_dong_bi_drop: dropped.length,
+        dong_bi_drop: dropped.map(x => ({
+          ly_do: x.reason,
+          dong_claude_bia: x.data.dong || '(không có)',
+          ghi_chu_claude: x.data.ghi_chu || ''
+        }))
+      })),
+      canh_bao_chung: `⚠️ Phát hiện Claude bịa ${Array.from(droppedByCau.values()).reduce((s,a)=>s+a.length,0)} dòng không có trong bài làm HS. Đã loại bỏ khỏi kết quả.`
+    };
+  }
 
   // ── Sanitize: xóa goi_y_sua, làm sạch nội dung ──────────────────────────
   sanitizeGradingResult(parsed);
@@ -213,7 +301,45 @@ Trả về JSON (không thêm text nào khác):
   // ── Tính lại điểm từ rubric (không tin AI tự cộng) ───────────────────────
   recomputeScoresFromRubric(parsed, rubric);
 
-  return parsed;
+  // ── Kiểm tra toàn vẹn: đảm bảo Claude không tự sửa nội dung HS ───────────
+  let finalResult = parsed;
+  try {
+    const { gradingResult: verified, stats } = verifyIntegrity(parsed, transcribed);
+    if (stats.violationCount > 0) {
+      console.warn(`[VERIFY] ${stats.violationCount}/${stats.totalLines} dòng nghi bị AI sửa. Auto-fixed: ${stats.autoFixedCount}`);
+    }
+    finalResult = verified;
+  } catch (e) {
+    console.warn('[VERIFY] Lỗi kiểm tra toàn vẹn, bỏ qua:', e.message);
+  }
+
+  // ── Preprocess math: wrap Unicode math trong $...$ cho KaTeX ─────────────
+  // Giữ trường gốc cho audit, thêm trường _katex cho render.
+  prepareForDisplay(finalResult);
+
+  return finalResult;
+}
+
+// Thêm bản đã wrap $...$ để KaTeX render. Giữ bản gốc để verify / export LaTeX.
+function prepareForDisplay(result) {
+  if (!result || typeof result !== 'object') return result;
+
+  const safeKatex = (v) => {
+    if (typeof v !== 'string' || !v) return v;
+    try { return textToKatex(v); } catch { return v; }
+  };
+
+  result.nhan_xet_chung_katex = safeKatex(result.nhan_xet_chung);
+
+  (result.cac_cau || []).forEach(cau => {
+    cau.loi_sai_katex = safeKatex(cau.loi_sai);
+    (cau.cham_tung_dong || []).forEach(d => {
+      d.dong_katex = safeKatex(d.dong);
+      d.ghi_chu_katex = safeKatex(d.ghi_chu);
+    });
+  });
+
+  return result;
 }
 
 // Fallback: tìm dòng gốc gần nhất khi Claude lỡ tự viết lại
@@ -275,35 +401,118 @@ function rubricMapFromRubric(rubric) {
   return map;
 }
 
-function recomputeScoresFromRubric(parsed, rubric) {
-  const rubricMap = rubricMapFromRubric(rubric);
-  let tong = 0;
-  parsed.cac_cau = (parsed.cac_cau || []).map(cau => {
-    const rubricCau = rubricMap.get(normalizeText(cau.so_cau));
-    if (!rubricCau) {
-      return {
-        ...cau,
-        diem_dat: Number(cau.diem_dat || 0),
-        diem_toi_da: Number(cau.diem_toi_da || 0),
-        co_nghi_van_rubric: true,
-        ghi_chu_noi_bo: 'Không khớp số câu với rubric'
-      };
+// Match tiêu chí AI với rubric: ưu tiên tieu_chi_index → mo_ta text → fallback theo vị trí
+function resolveCriterionMatch(aiCriteria, rubricCriteria) {
+  const usedAi = new Set();
+  const result = new Array(rubricCriteria.length).fill(null);
+
+  // Lần 1: match theo tieu_chi_index (nếu AI trả về đúng)
+  aiCriteria.forEach((ai, aiIdx) => {
+    const idx = typeof ai?.tieu_chi_index === 'number' ? ai.tieu_chi_index : parseInt(ai?.tieu_chi_index);
+    if (!isNaN(idx) && idx >= 0 && idx < rubricCriteria.length && !result[idx]) {
+      result[idx] = ai;
+      usedAi.add(aiIdx);
     }
+  });
+
+  // Lần 2: match theo mo_ta (normalize)
+  rubricCriteria.forEach((rc, rcIdx) => {
+    if (result[rcIdx]) return;
+    const rcNorm = normalizeText(rc.mo_ta);
+    for (let aiIdx = 0; aiIdx < aiCriteria.length; aiIdx++) {
+      if (usedAi.has(aiIdx)) continue;
+      const aiNorm = normalizeText(aiCriteria[aiIdx]?.tieu_chi);
+      if (aiNorm && aiNorm === rcNorm) {
+        result[rcIdx] = aiCriteria[aiIdx];
+        usedAi.add(aiIdx);
+        break;
+      }
+    }
+  });
+
+  // Lần 3: fallback theo vị trí cho các slot còn trống
+  rubricCriteria.forEach((_, rcIdx) => {
+    if (result[rcIdx]) return;
+    for (let aiIdx = 0; aiIdx < aiCriteria.length; aiIdx++) {
+      if (usedAi.has(aiIdx)) continue;
+      if (aiIdx === rcIdx) {
+        result[rcIdx] = aiCriteria[aiIdx];
+        usedAi.add(aiIdx);
+        break;
+      }
+    }
+  });
+
+  return result;
+}
+
+function deriveTrangThai(diemDat, diemMax, chamTungDong) {
+  if (diemMax <= 0) return 'Bỏ trống';
+  const soDong = Array.isArray(chamTungDong) ? chamTungDong.length : 0;
+  if (soDong === 0 && diemDat === 0) return 'Bỏ trống';
+  if (diemDat >= diemMax - 1e-9) return 'Đúng';
+  if (diemDat <= 1e-9) return 'Sai';
+  return 'Đúng một phần';
+}
+
+function recomputeScoresFromRubric(parsed, rubric) {
+  const rubricCauList = Array.isArray(rubric.cac_cau) ? rubric.cac_cau : [];
+  const aiByKey = new Map();
+  for (const cau of parsed.cac_cau || []) {
+    aiByKey.set(normalizeText(cau.so_cau), cau);
+  }
+
+  // Bắt đầu từ RUBRIC để đảm bảo không thiếu câu nào
+  const newCacCau = rubricCauList.map(rubricCau => {
+    const aiCau = aiByKey.get(normalizeText(rubricCau.so_cau)) || {};
     const rubricCriteria = Array.isArray(rubricCau.tieu_chi) ? rubricCau.tieu_chi : [];
-    const aiCriteria = Array.isArray(cau.diem_tieu_chi) ? cau.diem_tieu_chi : [];
+    const aiCriteria = Array.isArray(aiCau.diem_tieu_chi) ? aiCau.diem_tieu_chi : [];
+
+    const matched = resolveCriterionMatch(aiCriteria, rubricCriteria);
     const fixedCriteria = rubricCriteria.map((tc, idx) => {
-      const dat = (aiCriteria[idx] || {}).dat === true;
-      return { tieu_chi: tc.mo_ta, dat, diem: dat ? Number(tc.diem || 0) : 0 };
+      const dat = matched[idx]?.dat === true;
+      return {
+        tieu_chi: tc.mo_ta,
+        dat,
+        diem: dat ? Number(tc.diem || 0) : 0,
+        diem_toi_da: Number(tc.diem || 0)
+      };
     });
-    const diemDat = fixedCriteria.reduce((sum, tc) => sum + Number(tc.diem || 0), 0);
-    tong += diemDat;
+
+    const diemDat = fixedCriteria.reduce((s, tc) => s + Number(tc.diem || 0), 0);
+    const diemMax = Number(rubricCau.diem || 0);
+    const chamTungDong = Array.isArray(aiCau.cham_tung_dong) ? aiCau.cham_tung_dong : [];
+
+    const trangThai = deriveTrangThai(diemDat, diemMax, chamTungDong);
+
     return {
-      ...cau,
+      so_cau: rubricCau.so_cau,
       diem_dat: Math.round(diemDat * 100) / 100,
-      diem_toi_da: Number(rubricCau.diem || 0),
-      diem_tieu_chi: fixedCriteria
+      diem_toi_da: diemMax,
+      trang_thai: trangThai,
+      cham_tung_dong: chamTungDong,
+      diem_tieu_chi: fixedCriteria,
+      loi_sai: stripForbiddenContent(aiCau.loi_sai || '')
     };
   });
+
+  // Ghi chú câu AI chấm nhưng không có trong rubric (đánh dấu để giáo viên review)
+  const rubricKeys = new Set(rubricCauList.map(c => normalizeText(c.so_cau)));
+  for (const aiCau of parsed.cac_cau || []) {
+    if (!rubricKeys.has(normalizeText(aiCau.so_cau))) {
+      newCacCau.push({
+        ...aiCau,
+        diem_dat: 0,
+        diem_toi_da: 0,
+        co_nghi_van_rubric: true,
+        ghi_chu_noi_bo: 'Câu này không có trong rubric — không tính điểm'
+      });
+    }
+  }
+
+  parsed.cac_cau = newCacCau;
+
+  const tong = newCacCau.reduce((s, c) => s + Number(c.diem_dat || 0), 0);
   parsed.tong_diem = Math.round(tong * 100) / 100;
   parsed.diem_toi_da = Number(rubric.tong_diem || 0);
   parsed.phan_tram = parsed.diem_toi_da > 0
