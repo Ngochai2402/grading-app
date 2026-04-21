@@ -43,8 +43,8 @@ function uploadMiddleware(req, res, next) {
 // ════════════════════════════════════════════════════════════════
 async function transcribeWithGemini(files, subject) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  // Mặc định dùng flash (ổn định, quota cao). Set GEMINI_MODEL=gemini-2.5-pro nếu muốn pro.
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  // Mặc định dùng gemini-1.5-flash (ổn định, quota cao). Override qua GEMINI_MODEL env.
+  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
   const model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: { temperature: 0, responseMimeType: 'application/json' }
@@ -129,10 +129,10 @@ Trả về JSON thuần (không markdown, không text phụ):
       if (attempt === 4) throw err;
       if (!transient) throw err;
 
-      // Lần cuối cùng: thử fallback flash (nếu đang chạy pro)
-      if (attempt === 3 && currentName !== 'gemini-2.5-flash') {
-        console.warn(`[Gemini] Fallback từ ${currentName} → gemini-2.5-flash`);
-        currentName = 'gemini-2.5-flash';
+      // Lần cuối cùng: thử fallback gemini-1.5-flash (nếu đang chạy model khác)
+      if (attempt === 3 && currentName !== 'gemini-1.5-flash') {
+        console.warn(`[Gemini] Fallback từ ${currentName} → gemini-1.5-flash`);
+        currentName = 'gemini-1.5-flash';
         currentModel = genAI.getGenerativeModel({
           model: currentName,
           generationConfig: { temperature: 0, responseMimeType: 'application/json' }
