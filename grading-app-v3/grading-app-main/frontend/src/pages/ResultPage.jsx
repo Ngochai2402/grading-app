@@ -23,7 +23,7 @@ function injectKatex(cb) {
   document.head.appendChild(s1);
 }
 
-// ── Component MathText ─────────────────────────────────────────────────────
+// ── MathText ───────────────────────────────────────────────────────────────
 function MathText({ text, style }) {
   const ref = useRef(null);
 
@@ -49,15 +49,15 @@ function MathText({ text, style }) {
 // ── ResultPage ─────────────────────────────────────────────────────────────
 export default function ResultPage({ result, onBack }) {
   const { studentName, subject, gradingResult, imageUrls, resultId } = result;
-  const { tong_diem, diem_toi_da, phan_tram, xep_loai, cac_cau } = gradingResult;
+  const { tong_diem, diem_toi_da, phan_tram, xep_loai, cac_cau, tom_tat_review } = gradingResult;
 
   const scoreColor = phan_tram >= 80 ? "var(--green)" : phan_tram >= 60 ? "var(--amber)" : "var(--accent)";
   const scoreBg    = phan_tram >= 80 ? "#e8f5ee"      : phan_tram >= 60 ? "#fef3dc"      : "#fdecea";
 
   const statusBadge = (s) => {
-    if (s === "Đúng")            return <span className="badge badge-green">✓ Đúng</span>;
+    if (s === "Đúng")                             return <span className="badge badge-green">✓ Đúng</span>;
     if (s === "Đúng một phần" || s === "Một phần") return <span className="badge badge-amber">◑ Một phần</span>;
-    if (s === "Bỏ trống")        return <span className="badge" style={{ background: "#f0f0f0", color: "#888" }}>— Bỏ trống</span>;
+    if (s === "Bỏ trống")                         return <span className="badge" style={{ background: "#f0f0f0", color: "#888" }}>— Bỏ trống</span>;
     return <span className="badge badge-red">✗ Sai</span>;
   };
 
@@ -80,21 +80,18 @@ export default function ResultPage({ result, onBack }) {
         <div className="card" style={{ background: "#fdecea", borderLeft: "4px solid #c0392b", color: "#7a1d13", marginBottom: 16 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>🚨 Phát hiện AI bịa bước giải</div>
           <div style={{ fontSize: 13, lineHeight: 1.6 }}>{gradingResult.canh_bao_hallucination.canh_bao_chung}</div>
-          <details style={{ marginTop: 8 }}>
-            <summary style={{ cursor: "pointer", fontSize: 13 }}>Xem chi tiết các dòng bị drop</summary>
-            <ul style={{ marginTop: 6, paddingLeft: 20, fontSize: 13 }}>
-              {gradingResult.canh_bao_hallucination.chi_tiet.map((c, i) => (
-                <li key={i} style={{ marginBottom: 4 }}>
-                  <strong>{c.so_cau}:</strong>{" "}
-                  {c.dong_bi_drop.map((d, j) => (
-                    <code key={j} style={{ background: "#fff", padding: "1px 6px", borderRadius: 3, marginRight: 6 }}>
-                      {d.dong_claude_bia}
-                    </code>
-                  ))}
-                </li>
-              ))}
-            </ul>
-          </details>
+        </div>
+      )}
+
+      {/* BANNER: cần thầy xem */}
+      {tom_tat_review?.so_cau_can_xem > 0 && (
+        <div className="card" style={{ background: "#fef3dc", borderLeft: "4px solid #e67e22", color: "#8b5a1a", marginBottom: 16, padding: "14px 18px" }}>
+          <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 14 }}>
+            ⚠ Có {tom_tat_review.so_cau_can_xem}/{tom_tat_review.tong_so_cau} câu cần giáo viên xem lại
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+            Lý do: {tom_tat_review.ly_do_chinh.join(" · ")}
+          </div>
         </div>
       )}
 
@@ -119,19 +116,54 @@ export default function ResultPage({ result, onBack }) {
           {(cac_cau || []).map((cau, i) => {
             const pct = cau.diem_toi_da > 0 ? cau.diem_dat / cau.diem_toi_da : 0;
             const c   = pct >= 0.8 ? "var(--green)" : pct >= 0.4 ? "var(--amber)" : "var(--accent)";
-            return (
-              <div key={i} style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+            const doTinCayPct = typeof cau.do_tin_cay === "number" ? Math.round(cau.do_tin_cay * 100) : null;
+            const needReview = cau.can_giao_vien_xem === true;
+            // Highlight card cho câu cần review
+            const cardStyle = needReview
+              ? { border: "2px solid #e67e22", borderRadius: 10, overflow: "hidden", boxShadow: "0 0 0 3px #fef3dc" }
+              : { border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" };
 
+            return (
+              <div key={i} style={cardStyle}>
                 {/* Header câu */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", background: "var(--surface2)", borderBottom: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 16px", background: "var(--surface2)", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
                   <span style={{ fontWeight: 700, fontSize: 15 }}>{cau.so_cau}</span>
                   {statusBadge(cau.trang_thai)}
+                  {needReview && (
+                    <span style={{ background: "#e67e22", color: "#fff", fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 4 }}>
+                      ⚠ Cần xem lại
+                    </span>
+                  )}
+                  {doTinCayPct !== null && (
+                    <span style={{
+                      fontSize: 11,
+                      color: doTinCayPct >= 70 ? "#1b7a3e" : "#e67e22",
+                      background: "#fff",
+                      border: `1px solid ${doTinCayPct >= 70 ? "#1b7a3e" : "#e67e22"}`,
+                      padding: "2px 6px",
+                      borderRadius: 4
+                    }}>
+                      Tin cậy {doTinCayPct}%
+                    </span>
+                  )}
+                  {cau.tieu_chi_auto_tach && (
+                    <span style={{ fontSize: 11, color: "#1565c0", background: "#e3f2fd", padding: "2px 6px", borderRadius: 4 }}>
+                      Tiêu chí AI tự tách
+                    </span>
+                  )}
                   <span style={{ marginLeft: "auto", fontWeight: 700, color: c, fontSize: 17 }}>
                     {cau.diem_dat}<span style={{ fontSize: 12, color: "var(--text3)", fontWeight: 400 }}>/{cau.diem_toi_da}đ</span>
                   </span>
                 </div>
 
-                {/* Bảng dòng — 3 cột: Bài làm | Kết quả | Nhận xét */}
+                {/* Lý do cần xem */}
+                {needReview && Array.isArray(cau.ly_do_can_xem) && cau.ly_do_can_xem.length > 0 && (
+                  <div style={{ padding: "6px 16px", background: "#fef3dc", fontSize: 12, color: "#8b5a1a", borderBottom: "1px solid #f5d7a8" }}>
+                    <strong>Lý do:</strong> {cau.ly_do_can_xem.join(" · ")}
+                  </div>
+                )}
+
+                {/* Bảng dòng — 3 cột */}
                 {cau.cham_tung_dong?.length > 0 ? (
                   <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                     <colgroup>
