@@ -5,6 +5,7 @@ const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { v4: uuidv4 } = require('uuid');
+const { verifyIntegrity } = require('./verify');
 
 const router = express.Router();
 
@@ -123,50 +124,72 @@ async function gradeWithClaude(transcribed, rubric, studentName, subject) {
     .map((item, idx) => `[${idx}] (${item.cau}) ${item.dong}`)
     .join('\n');
 
-  const prompt = `Bạn là giáo viên ${subject} chuyên nghiệp. Chấm bài học sinh ${studentName}.
+  // Build rubric dạng rõ ràng: liệt kê tiêu chí có ID để Claude tham chiếu
+  const rubricSpec = (rubric.cac_cau || []).map(cau => {
+    const tcList = (cau.tieu_chi || []).map((tc, idx) =>
+      `    [TC${idx}] "${tc.mo_ta}" — ${tc.diem} điểm`
+    ).join('\n');
+    return `• ${cau.so_cau} (tối đa ${cau.diem}đ):
+  Đề: ${cau.noi_dung || '(không có)'}
+  Đáp án chuẩn: ${cau.dap_an || '(không có)'}
+  Tiêu chí chấm:
+${tcList}`;
+  }).join('\n\n');
 
-=== BÀI LÀM (mỗi dòng có INDEX ở đầu) ===
-${indexedText}
+  const rubricCauList = (rubric.cac_cau || []).map(c => c.so_cau).join(', ');
+
+  const prompt = `Bạn là giáo viên ${subject} chuyên nghiệp, chấm nghiêm túc. Học sinh: ${studentName}.
+
+=== BÀI LÀM HỌC SINH (mỗi dòng có INDEX [n] ở đầu) ===
+${indexedText || '(Học sinh không viết gì)'}
 
 === RUBRIC CHÍNH THỨC ===
-${JSON.stringify(rubric, null, 2)}
+${rubricSpec}
+
+Tổng điểm tối đa: ${rubric.tong_diem}
+Số câu phải chấm: ${(rubric.cac_cau || []).length} — ${rubricCauList}
 
 === NGUYÊN TẮC CHẤM — BẮT BUỘC ===
 
-QUAN TRỌNG NHẤT — Trường "dong_index":
-- "dong_index" là SỐ INDEX của dòng (số trong []).
-- TUYỆT ĐỐI KHÔNG viết lại nội dung dòng đó. Chỉ điền số index.
-- Ví dụ: dòng [3] thì "dong_index": 3. Không ghi thêm gì khác.
+A. VỀ THAM CHIẾU DÒNG:
+- "dong_index" là SỐ NGUYÊN trong [] ở đầu mỗi dòng bài làm.
+- TUYỆT ĐỐI KHÔNG viết lại, sửa, hoặc tóm tắt nội dung dòng. Chỉ điền số.
 
-Các nguyên tắc chấm:
-1. "ket_qua" = chỉ "✓ Đúng" hoặc "✗ Sai". Không dùng giá trị khác.
-2. "ghi_chu" = nếu sai: chỉ ra sai ở bước nào (tối đa 1 câu). Nếu đúng: để "".
-3. Chỉ cho điểm những gì HS THỰC SỰ viết — không suy diễn bước trung gian.
-4. Cách làm khác vẫn được điểm nếu đúng toán VÀ đáp ứng tiêu chí rubric.
-5. Nếu HS bỏ trống: diem_dat = 0, cham_tung_dong = [].
-6. "loi_sai": 1 câu mô tả lỗi chính. Để "" nếu đúng. KHÔNG viết cách sửa.
-7. KHÔNG tạo trường "goi_y_sua". KHÔNG viết hướng dẫn sửa ở bất cứ đâu.
-8. "nhan_xet_chung": nhận xét tổng quát. KHÔNG hướng dẫn sửa bài.
+B. VỀ CHẤM TIÊU CHÍ (quan trọng nhất cho tính điểm):
+- Với MỖI câu, bạn PHẢI trả về "diem_tieu_chi" có ĐÚNG ${(rubric.cac_cau || []).length > 0 ? 'số lượng và ĐÚNG thứ tự' : ''} tiêu chí như rubric trên.
+- Nếu rubric câu có 3 tiêu chí [TC0], [TC1], [TC2] → bạn phải trả về mảng 3 phần tử theo đúng thứ tự đó.
+- Mỗi phần tử: { "tieu_chi_index": <số TC>, "tieu_chi": "<copy nguyên văn mo_ta>", "dat": true|false }
+- "dat" = true CHỈ KHI học sinh thực sự đáp ứng tiêu chí đó. Nếu không rõ ràng → false.
+- KHÔNG tự cộng điểm. Backend sẽ tính điểm từ rubric dựa trên "dat".
+
+C. VỀ NỘI DUNG CHẤM:
+1. "ket_qua" chỉ: "✓ Đúng" hoặc "✗ Sai".
+2. "ghi_chu": nếu sai thì chỉ ra sai ở đâu (≤1 câu). Nếu đúng để "".
+3. Chỉ chấm đúng những gì HS THỰC SỰ viết — KHÔNG suy diễn bước trung gian.
+4. Cách giải khác vẫn được điểm nếu đúng toán học VÀ đạt tiêu chí rubric.
+5. Nếu HS bỏ trống câu: "diem_tieu_chi" vẫn phải đủ, tất cả dat=false; "cham_tung_dong"=[]; "trang_thai"="Bỏ trống".
+6. "loi_sai": 1 câu mô tả lỗi chính (không hướng dẫn sửa). Để "" nếu đúng.
+7. CẤM tạo "goi_y_sua" hoặc viết hướng dẫn sửa bài.
+8. "nhan_xet_chung": nhận xét tổng quát ngắn. KHÔNG hướng dẫn sửa.
+9. "trang_thai" ∈ { "Đúng", "Đúng một phần", "Sai", "Bỏ trống" }.
+
+D. VỀ ĐẦY ĐỦ:
+- PHẢI chấm đủ ${(rubric.cac_cau || []).length} câu, đúng tên: ${rubricCauList}.
+- Nếu không tìm thấy dòng nào của câu → vẫn trả về entry câu đó với cham_tung_dong=[], trang_thai="Bỏ trống".
 
 Trả về JSON (không thêm text nào khác):
 \`\`\`json
 {
-  "tong_diem": 0,
-  "diem_toi_da": 0,
-  "phan_tram": 0,
-  "xep_loai": "Yếu",
-  "nhan_xet_chung": "nhận xét ngắn, không hướng dẫn sửa",
+  "nhan_xet_chung": "nhận xét ngắn",
   "cac_cau": [
     {
       "so_cau": "Câu 1",
-      "diem_dat": 0,
-      "diem_toi_da": 0,
       "trang_thai": "Sai",
       "cham_tung_dong": [
         { "dong_index": 0, "ket_qua": "✗ Sai", "ghi_chu": "sai ở bước nào" }
       ],
       "diem_tieu_chi": [
-        { "tieu_chi": "tên tiêu chí", "dat": false, "diem": 0 }
+        { "tieu_chi_index": 0, "tieu_chi": "copy mo_ta từ rubric", "dat": false }
       ],
       "loi_sai": "mô tả lỗi, không hướng dẫn sửa"
     }
@@ -213,7 +236,17 @@ Trả về JSON (không thêm text nào khác):
   // ── Tính lại điểm từ rubric (không tin AI tự cộng) ───────────────────────
   recomputeScoresFromRubric(parsed, rubric);
 
-  return parsed;
+  // ── Kiểm tra toàn vẹn: đảm bảo Claude không tự sửa nội dung HS ───────────
+  try {
+    const { gradingResult: verified, stats } = verifyIntegrity(parsed, transcribed);
+    if (stats.violationCount > 0) {
+      console.warn(`[VERIFY] ${stats.violationCount}/${stats.totalLines} dòng nghi bị AI sửa. Auto-fixed: ${stats.autoFixedCount}`);
+    }
+    return verified;
+  } catch (e) {
+    console.warn('[VERIFY] Lỗi kiểm tra toàn vẹn, bỏ qua:', e.message);
+    return parsed;
+  }
 }
 
 // Fallback: tìm dòng gốc gần nhất khi Claude lỡ tự viết lại
@@ -275,35 +308,118 @@ function rubricMapFromRubric(rubric) {
   return map;
 }
 
-function recomputeScoresFromRubric(parsed, rubric) {
-  const rubricMap = rubricMapFromRubric(rubric);
-  let tong = 0;
-  parsed.cac_cau = (parsed.cac_cau || []).map(cau => {
-    const rubricCau = rubricMap.get(normalizeText(cau.so_cau));
-    if (!rubricCau) {
-      return {
-        ...cau,
-        diem_dat: Number(cau.diem_dat || 0),
-        diem_toi_da: Number(cau.diem_toi_da || 0),
-        co_nghi_van_rubric: true,
-        ghi_chu_noi_bo: 'Không khớp số câu với rubric'
-      };
+// Match tiêu chí AI với rubric: ưu tiên tieu_chi_index → mo_ta text → fallback theo vị trí
+function resolveCriterionMatch(aiCriteria, rubricCriteria) {
+  const usedAi = new Set();
+  const result = new Array(rubricCriteria.length).fill(null);
+
+  // Lần 1: match theo tieu_chi_index (nếu AI trả về đúng)
+  aiCriteria.forEach((ai, aiIdx) => {
+    const idx = typeof ai?.tieu_chi_index === 'number' ? ai.tieu_chi_index : parseInt(ai?.tieu_chi_index);
+    if (!isNaN(idx) && idx >= 0 && idx < rubricCriteria.length && !result[idx]) {
+      result[idx] = ai;
+      usedAi.add(aiIdx);
     }
+  });
+
+  // Lần 2: match theo mo_ta (normalize)
+  rubricCriteria.forEach((rc, rcIdx) => {
+    if (result[rcIdx]) return;
+    const rcNorm = normalizeText(rc.mo_ta);
+    for (let aiIdx = 0; aiIdx < aiCriteria.length; aiIdx++) {
+      if (usedAi.has(aiIdx)) continue;
+      const aiNorm = normalizeText(aiCriteria[aiIdx]?.tieu_chi);
+      if (aiNorm && aiNorm === rcNorm) {
+        result[rcIdx] = aiCriteria[aiIdx];
+        usedAi.add(aiIdx);
+        break;
+      }
+    }
+  });
+
+  // Lần 3: fallback theo vị trí cho các slot còn trống
+  rubricCriteria.forEach((_, rcIdx) => {
+    if (result[rcIdx]) return;
+    for (let aiIdx = 0; aiIdx < aiCriteria.length; aiIdx++) {
+      if (usedAi.has(aiIdx)) continue;
+      if (aiIdx === rcIdx) {
+        result[rcIdx] = aiCriteria[aiIdx];
+        usedAi.add(aiIdx);
+        break;
+      }
+    }
+  });
+
+  return result;
+}
+
+function deriveTrangThai(diemDat, diemMax, chamTungDong) {
+  if (diemMax <= 0) return 'Bỏ trống';
+  const soDong = Array.isArray(chamTungDong) ? chamTungDong.length : 0;
+  if (soDong === 0 && diemDat === 0) return 'Bỏ trống';
+  if (diemDat >= diemMax - 1e-9) return 'Đúng';
+  if (diemDat <= 1e-9) return 'Sai';
+  return 'Đúng một phần';
+}
+
+function recomputeScoresFromRubric(parsed, rubric) {
+  const rubricCauList = Array.isArray(rubric.cac_cau) ? rubric.cac_cau : [];
+  const aiByKey = new Map();
+  for (const cau of parsed.cac_cau || []) {
+    aiByKey.set(normalizeText(cau.so_cau), cau);
+  }
+
+  // Bắt đầu từ RUBRIC để đảm bảo không thiếu câu nào
+  const newCacCau = rubricCauList.map(rubricCau => {
+    const aiCau = aiByKey.get(normalizeText(rubricCau.so_cau)) || {};
     const rubricCriteria = Array.isArray(rubricCau.tieu_chi) ? rubricCau.tieu_chi : [];
-    const aiCriteria = Array.isArray(cau.diem_tieu_chi) ? cau.diem_tieu_chi : [];
+    const aiCriteria = Array.isArray(aiCau.diem_tieu_chi) ? aiCau.diem_tieu_chi : [];
+
+    const matched = resolveCriterionMatch(aiCriteria, rubricCriteria);
     const fixedCriteria = rubricCriteria.map((tc, idx) => {
-      const dat = (aiCriteria[idx] || {}).dat === true;
-      return { tieu_chi: tc.mo_ta, dat, diem: dat ? Number(tc.diem || 0) : 0 };
+      const dat = matched[idx]?.dat === true;
+      return {
+        tieu_chi: tc.mo_ta,
+        dat,
+        diem: dat ? Number(tc.diem || 0) : 0,
+        diem_toi_da: Number(tc.diem || 0)
+      };
     });
-    const diemDat = fixedCriteria.reduce((sum, tc) => sum + Number(tc.diem || 0), 0);
-    tong += diemDat;
+
+    const diemDat = fixedCriteria.reduce((s, tc) => s + Number(tc.diem || 0), 0);
+    const diemMax = Number(rubricCau.diem || 0);
+    const chamTungDong = Array.isArray(aiCau.cham_tung_dong) ? aiCau.cham_tung_dong : [];
+
+    const trangThai = deriveTrangThai(diemDat, diemMax, chamTungDong);
+
     return {
-      ...cau,
+      so_cau: rubricCau.so_cau,
       diem_dat: Math.round(diemDat * 100) / 100,
-      diem_toi_da: Number(rubricCau.diem || 0),
-      diem_tieu_chi: fixedCriteria
+      diem_toi_da: diemMax,
+      trang_thai: trangThai,
+      cham_tung_dong: chamTungDong,
+      diem_tieu_chi: fixedCriteria,
+      loi_sai: stripForbiddenContent(aiCau.loi_sai || '')
     };
   });
+
+  // Ghi chú câu AI chấm nhưng không có trong rubric (đánh dấu để giáo viên review)
+  const rubricKeys = new Set(rubricCauList.map(c => normalizeText(c.so_cau)));
+  for (const aiCau of parsed.cac_cau || []) {
+    if (!rubricKeys.has(normalizeText(aiCau.so_cau))) {
+      newCacCau.push({
+        ...aiCau,
+        diem_dat: 0,
+        diem_toi_da: 0,
+        co_nghi_van_rubric: true,
+        ghi_chu_noi_bo: 'Câu này không có trong rubric — không tính điểm'
+      });
+    }
+  }
+
+  parsed.cac_cau = newCacCau;
+
+  const tong = newCacCau.reduce((s, c) => s + Number(c.diem_dat || 0), 0);
   parsed.tong_diem = Math.round(tong * 100) / 100;
   parsed.diem_toi_da = Number(rubric.tong_diem || 0);
   parsed.phan_tram = parsed.diem_toi_da > 0
