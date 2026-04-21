@@ -97,24 +97,90 @@ Trả về JSON CHÍNH XÁC (không thêm text), cấu trúc:
   }
 });
 
-// POST /api/rubric/validate — kiểm tra rubric JSON có đúng chuẩn không
+// POST /api/rubric/validate — kiểm tra rubric JSON có đúng chuẩn không (validate sâu)
 router.post('/validate', (req, res) => {
   const { rubric } = req.body;
-  const errors = [];
-
-  if (!rubric.cac_cau || !Array.isArray(rubric.cac_cau)) {
-    errors.push('Thiếu trường cac_cau (mảng các câu hỏi)');
-  } else {
-    rubric.cac_cau.forEach((cau, i) => {
-      if (!cau.so_cau) errors.push(`Câu ${i + 1}: thiếu so_cau`);
-      if (cau.diem === undefined) errors.push(`Câu ${i + 1}: thiếu diem`);
-      if (!cau.dap_an) errors.push(`Câu ${i + 1}: thiếu dap_an`);
-    });
-  }
-
-  if (!rubric.tong_diem) errors.push('Thiếu tong_diem');
-
-  res.json({ valid: errors.length === 0, errors });
+  const result = validateRubricDeep(rubric);
+  res.json(result);
 });
 
+// Hàm validate sâu — export để dùng trong chỗ khác nếu cần
+function validateRubricDeep(rubric) {
+  const errors = [];   // lỗi chặn (không chấm được)
+  const warnings = []; // cảnh báo (vẫn chấm được nhưng thầy nên xem)
+
+  if (!rubric || typeof rubric !== 'object') {
+    return { valid: false, errors: ['Rubric không phải object hợp lệ'], warnings: [] };
+  }
+
+  // 1. Thiếu tong_diem
+  if (rubric.tong_diem === undefined || rubric.tong_diem === null) {
+    errors.push('Thiếu tong_diem (tổng điểm tối đa)');
+  }
+
+  // 2. cac_cau phải là array
+  if (!Array.isArray(rubric.cac_cau) || rubric.cac_cau.length === 0) {
+    errors.push('Thiếu hoặc rỗng cac_cau (mảng các câu)');
+    return { valid: errors.length === 0, errors, warnings };
+  }
+
+  // 3. Kiểm tra từng câu
+  let tongDiemCau = 0;
+  rubric.cac_cau.forEach((cau, i) => {
+    const label = cau.so_cau || `Câu thứ ${i + 1}`;
+
+    if (!cau.so_cau) {
+      errors.push(`${label}: thiếu so_cau`);
+    }
+    if (cau.diem === undefined || cau.diem === null) {
+      errors.push(`${label}: thiếu diem`);
+    } else {
+      tongDiemCau += Number(cau.diem);
+    }
+    if (!cau.dap_an) {
+      warnings.push(`${label}: thiếu dap_an (Claude sẽ khó đối chiếu, nên bổ sung đáp án chi tiết)`);
+    }
+    if (!cau.noi_dung) {
+      warnings.push(`${label}: thiếu noi_dung (nội dung câu hỏi)`);
+    }
+
+    // Kiểm tra tiêu chí
+    if (Array.isArray(cau.tieu_chi) && cau.tieu_chi.length > 0) {
+      const tongTC = cau.tieu_chi.reduce((s, tc) => s + Number(tc.diem || 0), 0);
+      if (Number(cau.diem) > 0 && Math.abs(tongTC - Number(cau.diem)) > 0.01) {
+        warnings.push(
+          `${label}: tổng điểm tiêu chí (${tongTC}) không khớp điểm câu (${cau.diem})`
+        );
+      }
+      cau.tieu_chi.forEach((tc, j) => {
+        if (!tc.mo_ta) warnings.push(`${label} tiêu chí ${j + 1}: thiếu mo_ta`);
+        if (tc.diem === undefined) warnings.push(`${label} tiêu chí ${j + 1}: thiếu diem`);
+      });
+    } else {
+      // Không có tiêu chí → cảnh báo cho câu có dấu hiệu phải chấm quá trình
+      const nd = String(cau.noi_dung || '').toLowerCase();
+      if (/chứng minh|rút gọn|giải bài toán|vẽ đồ thị|lập phương trình/.test(nd)) {
+        warnings.push(`${label}: câu dạng "${nd.slice(0, 40)}..." nên có tiêu chí chi tiết (AI sẽ tự tách khi chấm)`);
+      } else {
+        warnings.push(`${label}: chưa có tiêu chí (AI sẽ tự tách khi chấm)`);
+      }
+    }
+  });
+
+  // 4. Tổng điểm câu phải khớp tong_diem
+  if (rubric.tong_diem && Math.abs(tongDiemCau - Number(rubric.tong_diem)) > 0.01) {
+    warnings.push(
+      `Tổng điểm các câu (${tongDiemCau}) không khớp tong_diem (${rubric.tong_diem})`
+    );
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    tong_diem_cong_don: Math.round(tongDiemCau * 100) / 100
+  };
+}
+
 module.exports = router;
+module.exports.validateRubricDeep = validateRubricDeep;
