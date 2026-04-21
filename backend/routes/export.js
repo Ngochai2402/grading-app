@@ -10,7 +10,7 @@ const { createCanvas, loadImage } = require('canvas');
 //   - Δ, x², x₁, √21 và các ký tự Unicode
 //   - Sanitize lệnh sai (\bet → \beta, \mathttt → \mathtt)
 //   - Escape an toàn ký tự đặc biệt LaTeX
-const { textToLatex, textToLatexPlain } = require('./latex-utils');
+const { textToLatex, textToLatexPlain, textToKatex } = require('./latex-utils');
 
 const router = express.Router();
 
@@ -249,37 +249,20 @@ async function createAllAnnotated(data, outputPath) {
   fs.writeFileSync(outputPath, canvas.toBuffer('image/png'));
 }
 
-// ─── Chuyển Unicode → HTML (giữ nguyên hàm cũ vì HTML không bị lỗi) ──────────
+// Escape HTML đơn giản — không đụng $, \, { vì KaTeX auto-render cần giữ nguyên
+function htmlEscape(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// Render text thành HTML an toàn cho KaTeX: wrap math bằng $...$, escape HTML.
+// Ưu tiên text đã được preprocess (có $...$); nếu chưa, tự tokenize qua textToKatex.
 function mathToHtml(text) {
   if (!text) return '';
-  const SUB = '₀₁₂₃₄₅₆₇₈₉';
-  let result = '';
-  let i = 0;
-  const tryKatex = (latex) => {
-    try { return `<span class="math">${latex}</span>`; }
-    catch { return latex; }
-  };
-  while (i < text.length) {
-    const ch = text[i];
-    const fracM = text.slice(i).match(/^(\d+)\/(\d+)/);
-    if (fracM) { result += tryKatex(`\\(\\dfrac{${fracM[1]}}{${fracM[2]}}\\)`); i += fracM[0].length; continue; }
-    if (/[a-zA-Z]/.test(ch) && i+1 < text.length && SUB.includes(text[i+1])) {
-      const sub = SUB.indexOf(text[i+1]);
-      result += tryKatex(`\\(${ch}_{${sub}}\\)`); i += 2; continue;
-    }
-    if (ch === '²') { result += tryKatex('\\(^2\\)'); i++; continue; }
-    if (ch === '³') { result += tryKatex('\\(^3\\)'); i++; continue; }
-    if (ch === '√') {
-      let num='', j=i+1;
-      while(j<text.length && /\d/.test(text[j])){num+=text[j];j++;}
-      result += tryKatex(`\\(\\sqrt{${num||''}}\\)`); i=j; continue;
-    }
-    const syms = {'Δ':'\\Delta','△':'\\triangle','≈':'\\approx','≤':'\\leq','≥':'\\geq','⟹':'\\Rightarrow','⇒':'\\Rightarrow','→':'\\to','≠':'\\neq','∈':'\\in','⊥':'\\perp','∥':'\\parallel','∽':'\\sim','·':'\\cdot','π':'\\pi'};
-    if (syms[ch]) { result += tryKatex(`\\(${syms[ch]}\\)`); i++; continue; }
-    result += ch.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    i++;
-  }
-  return result;
+  const converted = textToKatex(text);
+  return htmlEscape(converted);
 }
 
 function buildAnnotationLines(gradingResult, transcribed) {
@@ -309,22 +292,24 @@ function generateReportHTML(data) {
       const isSai = d.ket_qua?.includes('✗');
       const bg = isSai ? '#fff5f5' : isDung ? '#f5fff8' : '#fffdf0';
       const kqColor = isSai ? '#c0392b' : isDung ? '#1b7a3e' : '#c47f17';
-      const canhBao = d.canh_bao ? `<div style="background:#fff3cd;border-left:3px solid #f0ad4e;padding:4px 8px;margin-top:4px;font-size:11px;color:#856404">⚠️ ${d.canh_bao}</div>` : '';
+      const canhBao = d.canh_bao ? `<div style="background:#fff3cd;border-left:3px solid #f0ad4e;padding:4px 8px;margin-top:4px;font-size:11px;color:#856404">⚠️ ${htmlEscape(d.canh_bao)}</div>` : '';
+      const dongDisp = d.dong_katex || d.dong || '';
+      const ghiChuDisp = d.ghi_chu_katex || d.ghi_chu || '';
       return `<tr style="background:${bg}">
-        <td style="font-size:13px;padding:7px 12px;color:#222;line-height:1.6">${mathToHtml(d.dong || '')}${canhBao}</td>
-        <td style="font-weight:700;color:${kqColor};padding:5px 10px;white-space:nowrap">${d.ket_qua || ''}</td>
-        <td style="font-size:12px;color:${isSai?'#c62828':'#555'};padding:7px 12px;line-height:1.6">${mathToHtml(d.ghi_chu || '')}</td>
+        <td style="font-size:13px;padding:7px 12px;color:#222;line-height:1.6">${mathToHtml(dongDisp)}${canhBao}</td>
+        <td style="font-weight:700;color:${kqColor};padding:5px 10px;white-space:nowrap">${htmlEscape(d.ket_qua || '')}</td>
+        <td style="font-size:12px;color:${isSai?'#c62828':'#555'};padding:7px 12px;line-height:1.6">${mathToHtml(ghiChuDisp)}</td>
       </tr>`;
     }).join('');
 
+    const loiSaiDisp = cau.loi_sai_katex || cau.loi_sai || '';
     return `<div style="border:1px solid #eee;border-radius:10px;margin-bottom:16px;overflow:hidden">
       <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:#fafafa;border-bottom:1px solid #eee">
-        <span style="font-weight:700;font-size:15px">${cau.so_cau}</span>
+        <span style="font-weight:700;font-size:15px">${htmlEscape(cau.so_cau)}</span>
         <span style="font-weight:700;color:${c};font-size:18px;margin-left:auto">${cau.diem_dat}/${cau.diem_toi_da}đ</span>
       </div>
       ${dongRows ? `<table style="width:100%;border-collapse:collapse">${dongRows}</table>` : ''}
-      ${cau.loi_sai ? `<div style="padding:10px 16px;background:#fff5f5;color:#c0392b;font-size:13px">✗ ${cau.loi_sai}</div>` : ''}
-      ${cau.goi_y_sua ? `<div style="padding:10px 16px;background:#f0f7ff;color:#1a5ca8;font-size:13px">💡 ${cau.goi_y_sua}</div>` : ''}
+      ${loiSaiDisp ? `<div style="padding:10px 16px;background:#fff5f5;color:#c0392b;font-size:13px">✗ ${mathToHtml(loiSaiDisp)}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -354,7 +339,7 @@ function generateReportHTML(data) {
     <div style="font-size:22px;font-weight:700;margin:6px 0">${studentName}</div>
     <div style="font-size:52px;font-weight:700;color:${sc};line-height:1">${tong_diem}<span style="font-size:24px;color:#aaa">/${diem_toi_da}</span></div>
     <div style="font-size:18px;color:${sc};margin-top:4px">${phan_tram}% · ${xep_loai}</div>
-    ${nhan_xet_chung ? `<div style="margin-top:12px;padding:12px;background:#f8f8f8;border-radius:8px;font-size:14px;line-height:1.6">${nhan_xet_chung}</div>` : ''}
+    ${nhan_xet_chung ? `<div style="margin-top:12px;padding:12px;background:#f8f8f8;border-radius:8px;font-size:14px;line-height:1.6">${mathToHtml(gradingResult.nhan_xet_chung_katex || nhan_xet_chung)}</div>` : ''}
   </div>
   <div class="card"><h2 style="font-size:16px;font-weight:600;margin-bottom:14px">Chấm từng dòng</h2>${cauHTML}</div>
   ${images ? `<div class="card"><h2 style="font-size:16px;font-weight:600;margin-bottom:12px">Bài làm học sinh</h2>${images}</div>` : ''}
@@ -366,28 +351,50 @@ function generateReportHTML(data) {
 document.addEventListener("DOMContentLoaded", function() {
   renderMathInElement(document.body, {
     delimiters: [
+      {left:"$$", right:"$$", display:true},
+      {left:"$", right:"$", display:false},
       {left:"\\\\(", right:"\\\\)", display:false},
       {left:"\\\\[", right:"\\\\]", display:true}
     ],
-    throwOnError: false
+    throwOnError: false,
+    strict: false
   });
+  if (new URLSearchParams(location.search).get('print') === '1') {
+    setTimeout(function(){ window.print(); }, 600);
+  }
 });
 </script>
 </body></html>`;
 }
 
-// ─── PDF export qua Railway XeLaTeX service ──────────────────────────────────
+// ─── PDF export: thử LaTeX service, fallback sang HTML auto-print ────────────
+// Khi LaTeX service (external Railway) down hoặc lỗi compile, redirect về HTML
+// trang báo cáo với ?print=1 → trình duyệt tự mở hộp thoại in → Save as PDF.
+// Như vậy người dùng luôn có đường xuất PDF, không phụ thuộc service ngoài.
 router.get('/:id/pdf', async (req, res) => {
   const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Không tìm thấy' });
 
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+  // Cho phép ép dùng fallback qua query ?via=print (debug/ưu tiên HTML)
+  const forceFallback = req.query.via === 'print' || process.env.PDF_USE_PRINT_FALLBACK === '1';
+
+  const redirectToPrint = (reason) => {
+    if (reason) console.warn(`[PDF] fallback HTML-print: ${reason}`);
+    return res.redirect(`/api/export/${req.params.id}/html?print=1`);
+  };
+
+  if (forceFallback) return redirectToPrint('forced by query/env');
+
   const latex = generateLatex(data);
+  const LATEX_URL = process.env.LATEX_SERVICE_URL;
+
+  // Không config LATEX_SERVICE_URL → dùng HTML print luôn (không gọi external)
+  if (!LATEX_URL) return redirectToPrint('LATEX_SERVICE_URL not set');
 
   try {
-    const LATEX_URL = process.env.LATEX_SERVICE_URL || 'https://overlef-my-production.up.railway.app/compile';
     const fetch = (await import('node-fetch')).default;
-
     const FormData = (await import('form-data')).default;
     const form = new FormData();
     form.append('content', latex);
@@ -402,14 +409,13 @@ router.get('/:id/pdf', async (req, res) => {
 
     if (!r.ok) {
       const errText = await r.text();
-      // Log latex source khi lỗi để debug
       console.error('═══ LATEX COMPILE ERROR ═══');
       console.error('Student:', data.studentName);
       console.error('Error:', errText.slice(0, 500));
       console.error('LaTeX source (500 ký tự đầu):');
       console.error(latex.slice(0, 500));
       console.error('═══════════════════════════');
-      return res.status(500).json({ error: 'LaTeX compile error', detail: errText.slice(0, 500) });
+      return redirectToPrint(`LaTeX service ${r.status}`);
     }
 
     const pdfBuffer = await r.buffer();
@@ -417,8 +423,8 @@ router.get('/:id/pdf', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="cham-bai-${req.params.id}.pdf"`);
     res.send(pdfBuffer);
   } catch (error) {
-    console.error('Lỗi xuất PDF:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Lỗi xuất PDF, fallback sang HTML print:', error.message);
+    return redirectToPrint(error.message);
   }
 });
 

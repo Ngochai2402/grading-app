@@ -89,7 +89,7 @@ export default function ResultPage({ result, onBack }) {
             <span style={{ fontWeight: 700, fontSize: 16, color: scoreColor }}>{xep_loai}</span>
           </div>
           <p style={{ fontSize: 14, lineHeight: 1.7, color: "var(--text)" }}>
-            <MathText text={nhan_xet_chung} />
+            <MathText text={gradingResult.nhan_xet_chung_katex || nhan_xet_chung} />
           </p>
         </div>
       </div>
@@ -129,7 +129,12 @@ export default function ResultPage({ result, onBack }) {
                         return (
                           <tr key={j} style={{ background: bg, borderTop: j > 0 ? "1px solid var(--border)" : "none" }}>
                             <td style={{ padding: "10px 14px", fontSize: 13.5, lineHeight: 1.8, verticalAlign: "middle", wordBreak: "break-word" }}>
-                              <MathText text={dong.dong} />
+                              <MathText text={dong.dong_katex || dong.dong} />
+                              {dong.ghi_chu && (
+                                <div style={{ marginTop: 4, fontSize: 12, color: "#c62828", lineHeight: 1.6 }}>
+                                  → <MathText text={dong.ghi_chu_katex || dong.ghi_chu} />
+                                </div>
+                              )}
                             </td>
                             <td style={{ padding: "10px 12px", fontWeight: 700, color: kqColor, fontSize: 13, verticalAlign: "middle", whiteSpace: "nowrap" }}>
                               {dong.ket_qua}
@@ -144,7 +149,7 @@ export default function ResultPage({ result, onBack }) {
                 {/* Lỗi + Gợi ý */}
                 {cau.loi_sai && (
                   <div style={{ padding: "10px 16px", background: "#fff5f5", fontSize: 13, color: "#c62828", borderTop: "1px solid #fdd", lineHeight: 1.7 }}>
-                    ✗ <strong>Lỗi:</strong> <MathText text={cau.loi_sai} />
+                    ✗ <strong>Lỗi:</strong> <MathText text={cau.loi_sai_katex || cau.loi_sai} />
                   </div>
                 )}
                 {cau.goi_y_sua && (

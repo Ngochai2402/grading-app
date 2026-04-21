@@ -6,6 +6,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { v4: uuidv4 } = require('uuid');
 const { verifyIntegrity } = require('./verify');
+const { textToKatex } = require('./latex-utils');
 
 const router = express.Router();
 
@@ -42,7 +43,11 @@ function uploadMiddleware(req, res, next) {
 // ════════════════════════════════════════════════════════════════
 async function transcribeWithGemini(files, subject) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+  });
 
   const imageParts = files.map(file => ({
     inlineData: {
@@ -53,23 +58,44 @@ async function transcribeWithGemini(files, subject) {
 
   const prompt = `Bạn là MÁY QUÉT bài thi môn ${subject}. Bạn KHÔNG phải giáo viên. Bạn KHÔNG biết tính toán.
 
-NHIỆM VỤ DUY NHẤT: Chép lại đúng y hệt từng dòng chữ trong ảnh. Không hơn không kém.
+NHIỆM VỤ DUY NHẤT: Chép lại CHÍNH XÁC TỪNG KÝ TỰ học sinh viết trên ảnh. Không thêm bớt, không diễn giải.
 
 TUYỆT ĐỐI CẤM:
-1. CẤM sửa phép tính, dù học sinh viết sai. Ví dụ: "delta = 20" thì chỉ ghi "delta = 20", KHÔNG đổi thành giá trị khác.
-2. CẤM thêm chú thích "(sai)", "(đúng)", "(học sinh ghi...)", "[thực ra là...]" hay bất cứ thứ gì thêm vào.
-3. CẤM đoán khi không đọc được — ghi [?].
-4. CẤM bỏ qua bất kỳ dòng nào, kể cả dòng bị gạch xóa.
+1. CẤM sửa phép tính dù học sinh viết sai. Ví dụ HS viết "Δ = 20" thì CHỈ ghi "Δ = 20". KHÔNG bao giờ đổi thành giá trị bạn tự tính.
+2. CẤM thêm chú thích "(sai)", "(đúng)", "(HS viết...)", "[thực ra...]".
+3. Nếu không đọc rõ ký tự → ghi [?] ngay tại vị trí đó. KHÔNG đoán.
+4. CẤM bỏ qua dòng nào, kể cả dòng gạch xóa — ghi dòng gạch xóa nguyên văn.
+5. CẤM gộp 2 dòng thành 1. Học sinh xuống dòng ở đâu, bạn xuống dòng ở đó.
 
-QUY TẮC:
-- Ký hiệu phân số: chép đúng tử/mẫu (vd: 7/2).
-- Chỉ số trên/dưới: x², x₁.
-- Hình vẽ: mô tả ngắn trong [], vd [Đồ thị parabol].
-- Nhiều ảnh: phân biệt [Trang 1], [Trang 2]...
-- Giữ nguyên xuống dòng như trong ảnh.
+QUY TẮC VIẾT CÔNG THỨC TOÁN (ưu tiên LaTeX trong $...$ để tránh nhập nhằng):
+- Phân số a/b nằm dọc: $\\dfrac{a}{b}$. Phân số ngang viết tay: a/b.
+- Lũy thừa: $x^2$, $x^{10}$, $a^{n+1}$.
+- Chỉ số dưới: $x_1$, $a_{ij}$.
+- Căn: $\\sqrt{21}$, $\\sqrt[3]{8}$.
+- Chữ Hy Lạp: $\\Delta$, $\\alpha$, $\\pi$, $\\theta$ (không dùng Δ Unicode vì dễ nhầm △ tam giác).
+- Tam giác: $\\triangle ABC$.
+- Ngoặc đa cấp: $\\left(\\frac{a+b}{c}\\right)$.
+- Mũi tên: $\\Rightarrow$, $\\Leftrightarrow$.
+- Dấu so sánh: $\\leq$, $\\geq$, $\\neq$, $\\approx$.
+- Các ký hiệu bình thường (+, -, =, <, >) có thể viết thẳng không cần $...$.
 
-Trả về JSON (không thêm text nào khác):
-\`\`\`json
+VÍ DỤ TỐT:
+- HS viết "x² + 2x + 1" → ghi "$x^2 + 2x + 1$" hoặc "x² + 2x + 1" (cả hai đều chấp nhận, nhưng LaTeX được ưu tiên).
+- HS viết "Δ = b² - 4ac" → ghi "$\\Delta = b^2 - 4ac$".
+- HS viết phân số 3/4 → ghi "$\\dfrac{3}{4}$".
+- HS viết "√25 = 5" → ghi "$\\sqrt{25} = 5$".
+
+QUY TẮC PHÂN CÂU:
+- Mỗi câu (Câu 1, Câu 2, Bài 1a, …) là 1 phần tử trong "cac_cau".
+- "so_cau" = đúng chuỗi học sinh viết: "Câu 1", "Câu 2a", "Bài 3", …
+- "noi_dung_goc" = mảng các dòng, mỗi phần tử là 1 dòng HS viết.
+- Nếu nhiều ảnh: ghi "[Trang 1]", "[Trang 2]" ở đầu noi_dung_goc của mỗi trang.
+
+KIỂM TRA TRƯỚC KHI TRẢ LỜI:
+- Đếm số câu trong ảnh → số phần tử cac_cau phải khớp.
+- Mọi con số, ký tự bạn viết có KHỚP CHÍNH XÁC với ảnh không? Nếu không chắc → dùng [?].
+
+Trả về JSON thuần (không markdown, không text phụ):
 {
   "cac_cau": [
     {
@@ -80,8 +106,7 @@ Trả về JSON (không thêm text nào khác):
       ]
     }
   ]
-}
-\`\`\``;
+}`;
 
   let text = '';
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -237,16 +262,44 @@ Trả về JSON (không thêm text nào khác):
   recomputeScoresFromRubric(parsed, rubric);
 
   // ── Kiểm tra toàn vẹn: đảm bảo Claude không tự sửa nội dung HS ───────────
+  let finalResult = parsed;
   try {
     const { gradingResult: verified, stats } = verifyIntegrity(parsed, transcribed);
     if (stats.violationCount > 0) {
       console.warn(`[VERIFY] ${stats.violationCount}/${stats.totalLines} dòng nghi bị AI sửa. Auto-fixed: ${stats.autoFixedCount}`);
     }
-    return verified;
+    finalResult = verified;
   } catch (e) {
     console.warn('[VERIFY] Lỗi kiểm tra toàn vẹn, bỏ qua:', e.message);
-    return parsed;
   }
+
+  // ── Preprocess math: wrap Unicode math trong $...$ cho KaTeX ─────────────
+  // Giữ trường gốc cho audit, thêm trường _katex cho render.
+  prepareForDisplay(finalResult);
+
+  return finalResult;
+}
+
+// Thêm bản đã wrap $...$ để KaTeX render. Giữ bản gốc để verify / export LaTeX.
+function prepareForDisplay(result) {
+  if (!result || typeof result !== 'object') return result;
+
+  const safeKatex = (v) => {
+    if (typeof v !== 'string' || !v) return v;
+    try { return textToKatex(v); } catch { return v; }
+  };
+
+  result.nhan_xet_chung_katex = safeKatex(result.nhan_xet_chung);
+
+  (result.cac_cau || []).forEach(cau => {
+    cau.loi_sai_katex = safeKatex(cau.loi_sai);
+    (cau.cham_tung_dong || []).forEach(d => {
+      d.dong_katex = safeKatex(d.dong);
+      d.ghi_chu_katex = safeKatex(d.ghi_chu);
+    });
+  });
+
+  return result;
 }
 
 // Fallback: tìm dòng gốc gần nhất khi Claude lỡ tự viết lại
