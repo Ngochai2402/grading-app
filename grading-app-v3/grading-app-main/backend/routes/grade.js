@@ -185,30 +185,43 @@ Số câu cần chấm: ${(rubric.cac_cau || []).length} — ${rubricCauList}
 
 === QUY TẮC ===
 
-A. THAM CHIẾU DÒNG (bắt buộc):
+A. TƯ DUY CHẤM (QUAN TRỌNG NHẤT):
+Bạn là GIÁO VIÊN ĐANG ĐỐI CHIẾU BÀI LÀM VỚI ĐÁP ÁN để quyết định đúng/sai.
+- Đọc kỹ "Đáp án chuẩn" của từng câu trong rubric. Đáp án chuẩn là SỰ THẬT.
+- So sánh kết quả cuối cùng của HS với đáp án chuẩn:
+  · HS ra kết quả TRÙNG với đáp án chuẩn → câu đó ĐÚNG, dù HS trình bày có bước khác lạ.
+  · HS ra kết quả KHÁC đáp án chuẩn → mới chấm sai.
+- TUYỆT ĐỐI KHÔNG tự ý tính toán theo đề bài riêng để "kiểm tra" HS. Ví dụ:
+  · Rubric ghi "Đáp án: A = 75, B = 45, C = 99, D = 81"
+  · HS ghi "25% × 500 = 75" → kết quả 75 khớp đáp án → ĐÚNG (dù HS có thể ghi nhầm 500 thay vì 300, nhưng đó là lỗi chép đề, không phải lỗi kết quả).
+  · Tương tự "15% × 500 = 45", "33% × 300 = 99" → các kết quả này đều khớp đáp án → ĐÚNG.
+- Nếu HS viết sai số liệu trong bước trung gian nhưng kết quả cuối đúng → chấm ĐÚNG, không bắt bẻ.
+- Chỉ chấm sai khi có bằng chứng rõ ràng: kết quả lệch đáp án, hoặc phương pháp sai toán học cơ bản.
+
+B. THAM CHIẾU DÒNG (bắt buộc):
 - MỖI entry trong "cham_tung_dong" phải có "dong_index" là SỐ NGUYÊN từ 0 đến ${lastIdx}.
 - TUYỆT ĐỐI KHÔNG viết lại nội dung dòng — CHỈ điền số index.
 - Không dùng lại cùng 1 dong_index trong cùng 1 câu.
 - Entry không có dong_index hợp lệ sẽ bị backend LOẠI BỎ.
 
-B. CHẤM TỪNG DÒNG — NGUYÊN TẮC CHÍNH:
-- "ket_qua" = "✓" hoặc "✗" (CHỈ 2 ký tự này, không gì khác).
-- Nếu dòng ĐÚNG → "ghi_chu" = "" (RỖNG, không ghi gì).
-- Nếu dòng SAI → "ghi_chu" = 1 câu NGẮN chỉ ra chỗ sai (VD: "Sai dấu", "Kết quả sai: phải là x=4", "Nhầm công thức").
-- CẤM viết hướng dẫn sửa dạng "Hãy...", "Nên...", "Cần...".
-- Phải đưa MỌI dòng HS viết vào cham_tung_dong (cả đúng và sai) để thầy thấy đầy đủ.
+C. CHẤM TỪNG DÒNG:
+- "ket_qua" = "✓" hoặc "✗" (CHỈ 2 ký tự này).
+- Nếu dòng ĐÚNG → "ghi_chu" = "" (RỖNG).
+- Nếu dòng SAI → "ghi_chu" = 1 câu CỰC NGẮN chỉ chỗ sai (≤ 10 từ). VD: "Sai dấu", "Kết quả sai", "Nhầm công thức Vi-ét".
+- TUYỆT ĐỐI CẤM: hướng dẫn sửa ("Hãy...", "Nên...", "Cần...", "đúng phải là...", "lẽ ra..."), giải thích dài dòng, tính toán thay HS.
+- Đưa MỌI dòng HS viết vào cham_tung_dong để thầy thấy đầy đủ.
 
-C. CHẤM TIÊU CHÍ (để backend tính điểm):
+D. CHẤM TIÊU CHÍ (để backend tính điểm):
 - Nếu câu có tiêu chí [TC0], [TC1]...: trả về "diem_tieu_chi" theo ĐÚNG thứ tự đó.
 - Mỗi phần tử: { "tieu_chi_index": <số>, "dat": true|false }
-- "dat" = true CHỈ KHI học sinh thực sự đáp ứng tiêu chí. Không rõ → false.
-- Nếu câu KHÔNG có tiêu chí: trả "diem_tieu_chi": [] (mảng rỗng) — backend sẽ tính theo tỉ lệ dòng đúng.
+- "dat" = true CHỈ KHI học sinh thực sự đáp ứng tiêu chí (dựa trên đáp án chuẩn). Không rõ → false.
+- Nếu câu KHÔNG có tiêu chí: trả "diem_tieu_chi": [] (mảng rỗng).
 
-D. TRANG THAI:
+E. TRẠNG THÁI:
 - "trang_thai" ∈ { "Đúng", "Đúng một phần", "Sai", "Bỏ trống" }.
 - HS bỏ trống câu → trang_thai = "Bỏ trống", cham_tung_dong = [], diem_tieu_chi tất cả dat=false.
 
-E. PHẢI CHẤM ĐỦ ${(rubric.cac_cau || []).length} CÂU: ${rubricCauList}.
+F. PHẢI CHẤM ĐỦ ${(rubric.cac_cau || []).length} CÂU: ${rubricCauList}.
 
 Trả về JSON thuần (không markdown, không text khác):
 {
@@ -311,11 +324,20 @@ Trả về JSON thuần (không markdown, không text khác):
   return parsed;
 }
 
-// Xóa hướng dẫn sửa (nếu Claude lỡ viết)
+// Xóa hướng dẫn sửa (nếu Claude lỡ viết) và cắt ghi chú quá dài
 function stripForbiddenContent(text) {
   let t = String(text || '').trim();
-  t = t.replace(/\b(?:hãy|nên|cần|phải|em\s+nên|em\s+hãy)\s+[^.!?;]*[.!?;]?\s*/gi, '').trim();
-  t = t.replace(/^(gợi ý|hướng sửa|cách sửa|hướng dẫn|cách làm đúng|sửa lại)\s*[:\-]?\s*/i, '').trim();
+  // Xóa các câu hướng dẫn sửa / gợi ý
+  t = t.replace(/\b(?:hãy|nên|cần|phải|em\s+nên|em\s+hãy|lẽ\s+ra|đ[uú]ng\s+ph[aả]i\s+l[aà]|c[aá]ch\s+s[uử]a)\s+[^.!?;]*[.!?;]?\s*/gi, '').trim();
+  t = t.replace(/^(gợi ý|hướng sửa|cách sửa|hướng dẫn|cách làm đúng|sửa lại|ghi nh[aầ]m)\s*[:\-]?\s*/i, '').trim();
+  // Xóa các dấu chấm/; thừa ở đầu/cuối
+  t = t.replace(/^[,;:.\s]+/, '').replace(/[,;]\s*$/, '').trim();
+  // Cắt ngắn nếu quá dài (> 80 ký tự hoặc > 15 từ)
+  if (t.length > 80) {
+    // Cắt tại dấu chấm/phẩy gần nhất trong 80 ký tự đầu
+    const firstSent = t.slice(0, 80).match(/^[^.;:]{1,80}/);
+    t = (firstSent ? firstSent[0] : t.slice(0, 80)).trim();
+  }
   return t;
 }
 
