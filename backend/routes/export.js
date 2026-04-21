@@ -346,7 +346,17 @@ function generateReportHTML(data) {
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',sans-serif;background:#f5f5f5;color:#222}
 .wrap{max-width:860px;margin:0 auto;padding:24px}.card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #eee}
-@media print{body{background:#fff}.no-print{display:none}}</style></head><body>
+@page{size:A4;margin:14mm}
+@media print{
+  body{background:#fff}
+  .no-print{display:none !important}
+  .wrap{max-width:100%;padding:0}
+  .card{box-shadow:none;page-break-inside:avoid;border:1px solid #ddd}
+  table{page-break-inside:auto}
+  tr{page-break-inside:avoid;page-break-after:auto}
+  img{max-width:100% !important;page-break-inside:avoid}
+  .katex{font-size:1em !important}
+}</style></head><body>
 <div class="wrap">
   ${hallucinationBanner}
   ${integrityBanner}
@@ -364,52 +374,82 @@ function generateReportHTML(data) {
   </div>
 </div>
 <script>
+// Chờ KaTeX load + ảnh tải xong rồi mới render + in → PDF sắc nét, không cắt math
+function whenReady(fn) {
+  var tries = 0;
+  (function check() {
+    if (typeof window.renderMathInElement === 'function') return fn();
+    if (tries++ > 60) return fn();
+    setTimeout(check, 100);
+  })();
+}
+function waitImages() {
+  var imgs = Array.from(document.images);
+  return Promise.all(imgs.map(function(img) {
+    if (img.complete) return Promise.resolve();
+    return new Promise(function(res) { img.addEventListener('load', res); img.addEventListener('error', res); });
+  }));
+}
 document.addEventListener("DOMContentLoaded", function() {
-  renderMathInElement(document.body, {
-    delimiters: [
-      {left:"$$", right:"$$", display:true},
-      {left:"$", right:"$", display:false},
-      {left:"\\\\(", right:"\\\\)", display:false},
-      {left:"\\\\[", right:"\\\\]", display:true}
-    ],
-    throwOnError: false,
-    strict: false
+  whenReady(function() {
+    try {
+      window.renderMathInElement(document.body, {
+        delimiters: [
+          {left:"$$", right:"$$", display:true},
+          {left:"$", right:"$", display:false},
+          {left:"\\\\(", right:"\\\\)", display:false},
+          {left:"\\\\[", right:"\\\\]", display:true}
+        ],
+        throwOnError: false,
+        strict: false
+      });
+    } catch(e) { console.warn('KaTeX error:', e); }
+
+    if (new URLSearchParams(location.search).get('print') === '1') {
+      waitImages().then(function() {
+        setTimeout(function(){ window.print(); }, 300);
+      });
+    }
   });
-  if (new URLSearchParams(location.search).get('print') === '1') {
-    setTimeout(function(){ window.print(); }, 600);
-  }
 });
 </script>
 </body></html>`;
 }
 
-// ─── PDF export: thử LaTeX service, fallback sang HTML auto-print ────────────
-// Khi LaTeX service (external Railway) down hoặc lỗi compile, redirect về HTML
-// trang báo cáo với ?print=1 → trình duyệt tự mở hộp thoại in → Save as PDF.
-// Như vậy người dùng luôn có đường xuất PDF, không phụ thuộc service ngoài.
+// ─── PDF export: mặc định dùng HTML auto-print (không phụ thuộc service ngoài)
+// ─────────────────────────────────────────────────────────────────────────────
+// LaTeX external service (Railway xelatex) rất dễ lỗi compile với font/math
+// phức tạp + tiếng Việt → mặc định TẮT. Người dùng luôn xuất được PDF qua
+// trình duyệt (Save as PDF từ hộp thoại in).
+//
+// Bật lại LaTeX: set LATEX_ENABLED=1 và LATEX_SERVICE_URL=<url>.
+// Khi LaTeX lỗi bất kỳ (network / compile / timeout) → auto fallback HTML print.
+// KHÔNG BAO GIỜ trả JSON error từ endpoint này.
 router.get('/:id/pdf', async (req, res) => {
   const filePath = path.join(__dirname, '../results', `${req.params.id}.json`);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Không tìm thấy' });
-
-  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-
-  // Cho phép ép dùng fallback qua query ?via=print (debug/ưu tiên HTML)
-  const forceFallback = req.query.via === 'print' || process.env.PDF_USE_PRINT_FALLBACK === '1';
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('Không tìm thấy bài chấm');
+  }
 
   const redirectToPrint = (reason) => {
-    if (reason) console.warn(`[PDF] fallback HTML-print: ${reason}`);
+    if (reason) console.warn(`[PDF] → HTML print (${reason})`);
     return res.redirect(`/api/export/${req.params.id}/html?print=1`);
   };
 
-  if (forceFallback) return redirectToPrint('forced by query/env');
+  // Default: HTML print. Chỉ thử LaTeX khi opt-in rõ ràng.
+  const latexEnabled = process.env.LATEX_ENABLED === '1' && process.env.LATEX_SERVICE_URL;
+  const forceLatex = req.query.via === 'latex';
+  const forcePrint = req.query.via === 'print';
 
-  const latex = generateLatex(data);
-  const LATEX_URL = process.env.LATEX_SERVICE_URL;
+  if (forcePrint) return redirectToPrint('forced via=print');
+  if (!latexEnabled && !forceLatex) return redirectToPrint('default HTML print mode');
 
-  // Không config LATEX_SERVICE_URL → dùng HTML print luôn (không gọi external)
-  if (!LATEX_URL) return redirectToPrint('LATEX_SERVICE_URL not set');
-
+  // Nhánh LaTeX (opt-in): vẫn bọc try/catch toàn phần, bao giờ lỗi → fallback
   try {
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const latex = generateLatex(data);
+    const LATEX_URL = process.env.LATEX_SERVICE_URL;
+
     const fetch = (await import('node-fetch')).default;
     const FormData = (await import('form-data')).default;
     const form = new FormData();
@@ -425,22 +465,16 @@ router.get('/:id/pdf', async (req, res) => {
 
     if (!r.ok) {
       const errText = await r.text();
-      console.error('═══ LATEX COMPILE ERROR ═══');
-      console.error('Student:', data.studentName);
-      console.error('Error:', errText.slice(0, 500));
-      console.error('LaTeX source (500 ký tự đầu):');
-      console.error(latex.slice(0, 500));
-      console.error('═══════════════════════════');
+      console.error('[PDF/LaTeX]', r.status, errText.slice(0, 300));
       return redirectToPrint(`LaTeX service ${r.status}`);
     }
 
     const pdfBuffer = await r.buffer();
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="cham-bai-${req.params.id}.pdf"`);
-    res.send(pdfBuffer);
+    return res.send(pdfBuffer);
   } catch (error) {
-    console.error('Lỗi xuất PDF, fallback sang HTML print:', error.message);
-    return redirectToPrint(error.message);
+    return redirectToPrint(error.message || 'unknown error');
   }
 });
 
